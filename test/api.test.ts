@@ -135,7 +135,7 @@ describe("pages", () => {
     const { get, tag } = client();
     const res = await get(`/p/lobby/${tag}/leak?set=key+AKIAIOSFODNN7EXAMPLE+here`);
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain("looks like a aws access key");
+    expect(await res.text()).toContain("looks like an aws access key");
     expect((await get(`/p/lobby/${tag}/leak`)).status).toBe(404);
     expect((await get(`/p/lobby/${tag}/leak?add=-----BEGIN+RSA+PRIVATE+KEY-----`)).status).toBe(400);
   });

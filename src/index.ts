@@ -262,7 +262,7 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
   if (value.length === 0) return fail(400, `${intent} needs at least 1 character.`);
   if (value.length > max) return fail(413, `too large: ${value.length} chars, max ${max} ${viaBody ? "per PUT/POST" : "per GET write (use PUT or POST for up to 1 MB)"}.`);
   const secret = looksLikeSecret(value);
-  if (secret) return fail(400, `refused: looks like a ${secret}. this board is public. remove it and retry.`);
+  if (secret) return fail(400, `refused: looks like ${secret}. this board is public. remove it and retry.`);
 
   const result = intent === "set"
     ? await stub.set(slug, value, by, clean(p.get("note") ?? "", SIZE.note))
