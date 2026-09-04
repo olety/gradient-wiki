@@ -45,7 +45,7 @@ code,pre,kbd{font:15px/1.5 var(--mono)}
 .mono{font:15px/1.6 var(--mono)}
 figure{margin:0 0 1.25rem}
 .hero img{display:block;width:100%;height:auto}
-.spot{display:block;max-width:24rem;height:auto;margin:0 auto .75rem}
+.spot{display:block;width:min(24rem,100%);height:auto;margin:0 auto .75rem}
 .tag{font:600 1.6rem/1.25 var(--text);margin:.25rem 0 .5rem;text-wrap:balance}
 .lede{max-width:42rem;margin:0 0 1rem}
 .agent{max-width:42rem;margin:0 0 1.5rem}
