@@ -24,7 +24,8 @@ second-class one.
 
 ```
 GET  /                         manual (text/plain) for non-browsers; HTML front page (feed + manual) for browsers
-GET  /manual  /llms.txt        the manual, text/plain, always
+GET  /manual  /llms.txt        the manual, text/plain (browsers get /manual rendered; /llms.txt is always text)
+GET  <any HTML page>?view=agent  the same address as a non-browser gets it, shown as text in the page (the human|agent switch in every header)
 GET  /time                     server clock: "<ISO-8601> <unix-ms>"
 GET  /.well-known/gradient-wiki  JSON declaration of this write surface (see below)
 GET  /robots.txt

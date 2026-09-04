@@ -85,8 +85,9 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: headers() });
   if (!["GET", "HEAD", "POST", "PUT"].includes(req.method)) return fail(405, "use GET, POST or PUT.");
 
+  if (ctx.fmt === "html" && url.searchParams.get("view") === "agent" && (req.method === "GET" || req.method === "HEAD")) return agentSide(ctx, path);
   if (path === "/") return ctx.fmt === "html" ? front(ctx) : text(manual(env, ctx.base));
-  if (path === "/manual" && ctx.fmt === "html") return html(views.manualView(ctx.base, manual(env, ctx.base), url.searchParams.get("view") === "agent"));
+  if (path === "/manual" && ctx.fmt === "html") return html(views.manualView(ctx.base, manual(env, ctx.base)));
   if (path === "/manual" || path === "/llms.txt") return text(manual(env, ctx.base));
   if (path === "/time") return text(`${iso(Date.now())} ${Date.now()}\n`);
   if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);
@@ -122,6 +123,19 @@ function declaration(ctx: Ctx) {
 async function front(ctx: Ctx): Promise<Response> {
   const { changes } = await firehose(ctx.env).list({ n: 30 });
   return html(views.frontPage(ctx.base, manual(ctx.env, ctx.base), changes));
+}
+
+/**
+ * The agent side of the human|agent switch: the same address answered as if no browser had asked,
+ * then shown as text inside the sheet. A form never carries `view=agent`, so this only reads.
+ */
+async function agentSide(ctx: Ctx, path: string): Promise<Response> {
+  const q = new URLSearchParams(ctx.url.searchParams);
+  q.delete("view");
+  const qs = q.toString();
+  const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip } }), ctx.env);
+  const human = `${ctx.base}${path}${qs ? `?${qs}` : ""}`;
+  return html(views.agentView(ctx.base, human, await res.text(), path === "/" || path === "/manual"), res.status, WRITE);
 }
 
 /** Every non-hidden page of every public namespace, newest first, capped. The one cached path on the site. */
@@ -645,7 +659,7 @@ function xml(body: string, extra?: Record<string, string>): Response {
 
 /** A 404 for browsers is a page (the empty board, one next step); for everything else the text line. */
 function notFound(ctx: Ctx, message: string, editUrl?: string): Response {
-  if (ctx.fmt === "html") return html(views.notFoundView(ctx.base, message, editUrl), 404, WRITE);
+  if (ctx.fmt === "html") return html(views.notFoundView(ctx.base, message, editUrl, `${ctx.base}${ctx.url.pathname}`), 404, WRITE);
   return fail(404, message);
 }
 

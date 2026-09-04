@@ -55,12 +55,12 @@ figure{margin:0 0 1.25rem}
 .split p{margin:0 0 .5rem}
 .prompt{display:flex;align-items:flex-start;gap:.4rem;padding:.6rem .4rem .6rem .9rem}
 .prompt code{flex:1;min-width:0;font:15px/1.55 var(--mono);overflow-wrap:break-word;padding:.35rem 0}
-.tools{display:inline-flex;align-items:center;gap:.75rem}
 .seg{display:inline-flex;border:1px solid var(--bark);border-radius:2px;overflow:hidden;font:14px/1 var(--mono)}
 .seg a{padding:.6rem .8rem;color:var(--ink-soft);text-decoration:none}
 .seg a.on{background:var(--ink);color:var(--paper)}
 @media(hover:hover){.seg a:not(.on):hover{background:var(--paper-deep);color:var(--ink)}}
 .raw{font:14px/1.6 var(--mono);white-space:pre;overflow-x:auto;margin:0}
+.raw.wrap{white-space:pre-wrap;overflow-wrap:break-word}
 .raw b{font-weight:700}
 .raw .ph{color:var(--bark);font-style:italic}
 .h2row h2 a{text-decoration:none}
@@ -80,18 +80,16 @@ figure{margin:0 0 1.25rem}
 button.icon{width:40px;height:40px;min-height:0;padding:0;margin:0;border:0;border-radius:2px;background:transparent;color:var(--ink-soft);display:inline-grid;place-items:center;flex:none}
 @media(hover:hover){button.icon:hover{color:var(--ink);background:var(--paper-deep)}.well button.icon:hover{background:var(--paper)}}
 ol.path{list-style:none;margin:0;padding:0 0 0 1.75rem}
-ol.path li{position:relative;display:grid;grid-template-columns:3.4rem minmax(0,1fr) auto;column-gap:.75rem;align-items:baseline;padding:.4rem 0}
+ol.path li{position:relative;display:grid;grid-template-columns:6.4rem minmax(0,1fr) auto;column-gap:.75rem;align-items:baseline;padding:.4rem 0}
 ol.path .n{position:absolute;left:calc(.5px - 1.75rem);top:calc(.4rem + 6px);width:11px;height:11px;border:1.5px solid var(--ink);background:var(--paper)}
 ol.path li::before,ol.path li::after{content:"";position:absolute;left:calc(7px - 1.75rem);border-left:1px dashed var(--bark)}
 ol.path li::before{top:0;height:calc(.4rem + 6px)}
 ol.path li::after{top:calc(.4rem + 20px);bottom:0}
-ol.path li:first-child::before,ol.path li:last-child::after,ol.path li.day::before,ol.path li.day::after,ol.path li.day+li::before,ol.path li:has(+li.day)::after{display:none}
+ol.path li:first-child::before,ol.path li:last-child::after{display:none}
 ol.path li.now .n{background:var(--seal);border-color:var(--seal)}
 ol.path li.redacted .n{background:var(--bark);border-color:var(--bark)}
 ol.path li.redacted .what{text-decoration:line-through;color:var(--ink-soft)}
-ol.path li.day{display:block;margin-left:-1.75rem;padding:1.1rem 0 .3rem;font:13px/1.4 var(--mono);color:var(--bark)}
-ol.path li:first-child.day{padding-top:.1rem}
-.t{font:14px/1.6 var(--mono);color:var(--bark);font-variant-numeric:tabular-nums}
+.t{font:14px/1.6 var(--mono);color:var(--bark);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .what{min-width:0;overflow-wrap:break-word}
 .note{color:var(--ink-soft);margin-left:.5rem}
 ol.path .facts{grid-column:3;text-align:right;white-space:nowrap}
@@ -119,6 +117,6 @@ button:active,input[type=submit]:active{transform:scale(.96)}
 footer{border-top:1px solid var(--fog);padding:1rem 0 0;font:14px/1.6 var(--mono);color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
 p.notice{font:14px/1.6 var(--mono);color:var(--ink-soft);margin:0 0 1rem}
 .more{font:15px/1.6 var(--mono);margin:1rem 0 0}
-@media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}.head h1{font-size:1.5rem}.split{grid-template-columns:minmax(0,1fr)}ol.path li{grid-template-columns:3.4rem minmax(0,1fr)}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}
+@media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}.head h1{font-size:1.5rem}.split{grid-template-columns:minmax(0,1fr)}.wm{order:-2}.seg{order:-1;margin-left:auto}header nav{margin-left:0}ol.path li{grid-template-columns:5.9rem minmax(0,1fr)}.t{font-size:13px}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}
 @media(prefers-reduced-motion:reduce){button:active,input[type=submit]:active{transform:none}}
 `.trim();

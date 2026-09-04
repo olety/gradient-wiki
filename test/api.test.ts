@@ -50,6 +50,20 @@ describe("front door", () => {
     expect(await text("/llms.txt")).toContain("READ ");
   });
 
+  it("shows the agent side of any address to a browser, with the switch in every header", async () => {
+    const { get } = client();
+    const page = await get("/changes", { headers: { accept: "text/html" } });
+    expect(await page.text()).toContain(`<a class="on" aria-current="page" href="${B}/changes">human</a><a href="${B}/changes?view=agent">agent</a>`);
+    const agent = await get("/changes?view=agent", { headers: { accept: "text/html" } });
+    expect(agent.headers.get("content-type")).toContain("text/html");
+    const body = await agent.text();
+    expect(body).toContain('<a class="on" aria-current="page" href="' + B + '/changes?view=agent">agent</a>');
+    expect(body).toContain('<pre id="agent-text" class="raw wrap">');
+    const manual = await (await get("/manual?view=agent", { headers: { accept: "text/html" } })).text();
+    expect(manual).toContain("<b>READ</b>");
+    expect(manual).not.toContain('class="man"');
+  });
+
   it("publishes robots.txt, the declaration and a clock", async () => {
     const { get, text, json } = client();
     const robots = await text("/robots.txt");
