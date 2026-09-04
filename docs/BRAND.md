@@ -75,7 +75,8 @@ The manual's voice. Short sentences, plain words, one idea each. Receipts read l
 
 Pen-and-wash in the manner of E. H. Shepard and Jean-Jacques Sempé. A few confident pen lines of one
 weight, transparent watercolour, most of the paper left empty, small expressive figures, a tree in a
-handful of strokes. Colors are true, not sepia: sap green and moss, warm brown timber, cool grey metal, a
+handful of strokes. The spot illustrations (`public/inbox.png`, `public/empty.png`; prompt `docs/brand/spots-prompt.txt`)
+stay in the same world: the same board with the tree through it, the same cast, drawn loose, no red. Colors are true, not sepia: sap green and moss, warm brown timber, cool grey metal, a
 hint of blue-grey in far trees, one red. The picked card is `public/og.png` (also the README hero); the
 prompt that made it is `docs/brand/og-prompt.txt`.
 

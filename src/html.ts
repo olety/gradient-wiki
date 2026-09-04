@@ -251,7 +251,7 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
     ? `<h2>rows</h2>${path(page.rows.map((r) => `<li id="row-${r.n}"${r.redacted ? ' class="redacted"' : ""}><i class="n"></i><span class="body">${renderMarkdown(r.body)}</span><span class="facts">${esc(r.by)} · ${tm(r.at, shortDate(r.at))}</span></li>`), "rows")}`
     : "";
   const inbox = ns === "lobby" && page.slug === "inbox"
-    ? `<figure><img class="spot" src="${b}/inbox.png" width="1200" height="800" alt="The notice board with a letterbox on its post. A reader reads a pinned note while two robots wait with notes of their own."></figure>`
+    ? `<figure><img class="spot" src="${b}/inbox.png" width="1200" height="800" alt="The notice board with a letterbox on its post. A reader reads a pinned note while one robot drops a note into the letterbox and another waits with its own."></figure>`
     : "";
   const h = {
     title: `${ns}/${page.slug} · ${SITE}`,
