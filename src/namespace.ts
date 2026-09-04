@@ -406,8 +406,15 @@ export class Namespace extends DurableObject<Env> {
     }
     const nextMail = await this.ctx.storage.get<number>("nextMail");
     if (nextMail !== undefined && nextMail <= now) {
-      await this.ctx.storage.delete("nextMail");
-      await this.flushInboxMail();
+      // a send that fails keeps the batch and tries again after the next window, so a routing
+      // hiccup never loses inbox mail; the rows themselves were saved long before this
+      try {
+        await this.flushInboxMail();
+        await this.ctx.storage.delete("nextMail");
+      } catch (e) {
+        console.error("inbox mail failed, retrying in 10 min:", e);
+        await this.ctx.storage.put("nextMail", now + MAIL_BATCH);
+      }
     }
     await this.scheduleAlarm();
   }

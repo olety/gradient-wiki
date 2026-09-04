@@ -402,6 +402,9 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
   if (!constantTimeEqual(p.get("mod") ?? "", modKey)) return fail(403, "bad moderation key.");
   const reason = clean(p.get("reason") ?? "", SIZE.note);
 
+  // an ops action, not moderation of content, so it is not logged: send the inbox mail now
+  if (p.get("mail") === "1") return receipt(ctx, "mailed", { rows: await stub.flushInboxMail() }, [`mailed ${await stub.mailState().then((s) => s.mailedN)} inbox rows so far ${pageUrl}`]);
+
   const redactRev = Number(p.get("redact"));
   const redactRow = Number(p.get("redactrow"));
   if (p.has("redact") || p.has("redactrow")) {
