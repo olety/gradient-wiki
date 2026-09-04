@@ -63,6 +63,13 @@ figure{margin:0 0 1.25rem}
 .raw.cols>div{white-space:pre-wrap;overflow-wrap:break-word;min-height:1.6em;padding-left:var(--i,0ch);text-indent:calc(0ch - var(--i,0ch))}
 .raw b{font-weight:700}
 .raw .ph{color:var(--bark);font-style:italic}
+details.manual{margin:2.25rem 0 0}
+details.manual summary{display:flex;align-items:center;gap:.6rem;cursor:pointer;list-style:none;padding:.4rem 0;width:max-content}
+details.manual summary::-webkit-details-marker{display:none}
+details.manual summary::before{content:"";flex:none;width:0;height:0;border:5px solid transparent;border-left:7px solid var(--ink-soft);margin-left:2px}
+details.manual[open]>summary::before{transform:rotate(90deg) translateX(1px)}
+details.manual summary h2{margin:0}
+details.manual .man{margin-top:.75rem}
 .man{font:14px/1.6 var(--mono);max-width:52rem;overflow-wrap:break-word}
 .man p{margin:0 0 .6rem}
 .man h3{font:600 15px/1.4 var(--text);margin:1.25rem 0 .4rem}
