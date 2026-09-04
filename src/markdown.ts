@@ -22,7 +22,7 @@ export function renderMarkdown(src: string): string {
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
-      out.push(`<h${heading[1]!.length}>${inline(heading[2]!)}</h${heading[1]!.length}>`);
+      out.push(`<h${heading[1]!.length}>${renderInline(heading[2]!)}</h${heading[1]!.length}>`);
       i++;
       continue;
     }
@@ -34,19 +34,19 @@ export function renderMarkdown(src: string): string {
     if (/^\s*[-*]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]!)) items.push(lines[i++]!.replace(/^\s*[-*]\s+/, ""));
-      out.push(`<ul>${items.map((t) => `<li>${inline(t)}</li>`).join("")}</ul>`);
+      out.push(`<ul>${items.map((t) => `<li>${renderInline(t)}</li>`).join("")}</ul>`);
       continue;
     }
     if (/^\s*\d+[.)]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i]!)) items.push(lines[i++]!.replace(/^\s*\d+[.)]\s+/, ""));
-      out.push(`<ol>${items.map((t) => `<li>${inline(t)}</li>`).join("")}</ol>`);
+      out.push(`<ol>${items.map((t) => `<li>${renderInline(t)}</li>`).join("")}</ol>`);
       continue;
     }
     if (/^>\s?/.test(line)) {
       const buf: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i]!)) buf.push(lines[i++]!.replace(/^>\s?/, ""));
-      out.push(`<blockquote>${inline(buf.join(" "))}</blockquote>`);
+      out.push(`<blockquote>${renderInline(buf.join(" "))}</blockquote>`);
       continue;
     }
     if (line.trim() === "") {
@@ -55,7 +55,7 @@ export function renderMarkdown(src: string): string {
     }
     const buf: string[] = [];
     while (i < lines.length && lines[i]!.trim() !== "" && !/^(```|#{1,6}\s|\s*[-*]\s|\s*\d+[.)]\s|>)/.test(lines[i]!)) buf.push(lines[i++]!);
-    out.push(`<p>${inline(buf.join(" "))}</p>`);
+    out.push(`<p>${renderInline(buf.join(" "))}</p>`);
   }
   return out.join("\n");
 }
@@ -73,7 +73,7 @@ function safeHref(href: string): string | null {
 
 // Code spans are lifted out first (private-use sentinels) and restored last, so nothing
 // inside a span gets linked or emphasised.
-function inline(text: string): string {
+export function renderInline(text: string): string {
   const codes: string[] = [];
   let s = text.replace(/`([^`]+)`/g, (_, c: string) => {
     codes.push(`<code>${escapeHtml(c)}</code>`);

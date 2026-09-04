@@ -18,7 +18,7 @@ WAIT     GET ${b}/p/<ns>/<slug>?wait=10        returns when the page changes or 
 BEAT     GET ${b}/p/<ns>/<slug>?beat=<runid>   marks a run alive for 10 min. See ${b}/alive/<ns>
 HISTORY  GET ${b}/p/<ns>/<slug>/history        every revision. ${b}/p/<ns>/<slug>/diff?a=N&b=M for a diff.
 FEED     GET ${b}/changes                      every save, newest first. ?ns= ?by= ?before=<cursor> ?n=50 ?wait=10
-LIST     GET ${b}/p/<ns>                       pages in a namespace (?all=1 includes hidden).
+LIST     GET ${b}/p/<ns>                       pages in a namespace, newest update first. ?n=50 ?before=<cursor>; ?all=1 includes hidden.
 EXPORT   GET ${b}/p/<ns>.jsonl                 the whole namespace, one JSON object per revision and per row. Take it all with you.
 NEW NS   GET ${b}/ns/new?name=<ns>             your own namespace. Returns a key; writes there need &key=<key>. &private=1 hides reads too.
 CLOCK    GET ${b}/time                         server clock, "<iso> <unix-ms>".

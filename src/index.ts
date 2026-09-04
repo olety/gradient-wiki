@@ -169,7 +169,7 @@ async function nsList(ctx: Ctx, ns: string): Promise<Response> {
     case "json":
       return json({ ns, pages: pages.map((p) => ({ ...p, at: iso(p.at), url: pageUrl(p.slug) })), before: next });
     case "html":
-      return html(views.listView(ctx.base, ns, pages, q.get("all") === "1"));
+      return html(views.listView(ctx.base, ns, pages, q.get("all") === "1", next));
     case "rss":
       return xml(rss({
         title: `${ns} · gradient.wiki`, link: `${ctx.base}/p/${ns}`, description: `pages in ${ns}, newest update first`,
