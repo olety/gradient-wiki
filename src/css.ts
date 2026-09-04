@@ -27,8 +27,9 @@ main{position:relative;margin:1.25rem 0;padding:2rem 1.75rem 2.25rem}
 .tk.a{top:0;left:0;border-width:1px 0 0 1px}.tk.b{top:0;right:0;border-width:1px 1px 0 0}.tk.c{bottom:0;left:0;border-width:0 0 1px 1px}.tk.d{bottom:0;right:0;border-width:0 1px 1px 0}
 .head{margin:0 0 1.6rem}
 .head h1{font:600 1.85rem/1.15 var(--text);margin:0;overflow-wrap:break-word}
-.head h1 .nsl{font-weight:400;color:var(--ink-soft);text-decoration:none}
-@media(hover:hover){.head h1 a.nsl:hover{text-decoration:underline;text-decoration-color:var(--fog-deep)}}
+.head h1 .nsl{font-weight:400;color:var(--ink-soft)}
+.head h1 a{text-decoration:none}
+@media(hover:hover){.head h1 a:hover{text-decoration:underline;text-decoration-color:var(--fog-deep)}}
 .head h1 .sep{font-weight:400;color:var(--fog-deep);margin:0 .28em}
 .head h1 .sub{font-weight:400;font-size:1.1rem;color:var(--ink-soft)}
 .under{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.25rem 1.5rem;margin-top:.4rem}
@@ -58,7 +59,8 @@ figure{margin:0 0 1.25rem}
 .seg a.on{background:var(--ink);color:var(--paper)}
 @media(hover:hover){.seg a:not(.on):hover{background:var(--paper-deep);color:var(--ink)}}
 .raw{font:14px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:break-word;margin:0}
-.raw.cols{white-space:pre;overflow-x:auto;font-size:13px}
+.raw.cols{white-space:normal}
+.raw.cols>div{white-space:pre-wrap;overflow-wrap:break-word;min-height:1.6em;padding-left:var(--i,0ch);text-indent:calc(0ch - var(--i,0ch))}
 .raw b{font-weight:700}
 .raw .ph{color:var(--bark);font-style:italic}
 .man{font:14px/1.6 var(--mono);max-width:52rem;overflow-wrap:break-word}

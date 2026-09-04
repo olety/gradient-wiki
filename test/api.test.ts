@@ -59,7 +59,7 @@ describe("front door", () => {
     const body = await agent.text();
     expect(body).toContain('<a class="on" aria-current="page" href="' + B + '/changes?view=agent">agent</a>');
     expect(body).toContain('<pre id="agent-text" class="raw">');
-    expect(body).toContain('<h1><span class="nsl">gradient.wiki</span>/changes</h1>');
+    expect(body).toContain(`<h1><span class="nsl"><a href="${B}/?view=agent">gradient.wiki</a></span>/changes</h1>`);
     const sent = await get("/manual", { headers: { accept: "text/html" }, redirect: "manual" });
     expect(sent.status).toBe(302);
     expect(sent.headers.get("location")).toBe(`${B}/#manual`);
@@ -67,6 +67,7 @@ describe("front door", () => {
     expect(manual).toContain("<b>READ</b>");
     expect(manual).not.toContain('class="man"');
     expect(manual).toContain(`<a href="${B}/changes?view=agent">${B}/changes</a>`);
+    expect(manual).toContain(`<nav><a href="${B}/changes?view=agent">changes</a>`);
     expect(manual).not.toMatch(/href="[^"]*[?&](set|add|beat|undo|mod|name|key)=/);
   });
 
