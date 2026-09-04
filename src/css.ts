@@ -76,9 +76,9 @@ button.icon{width:40px;height:40px;min-height:0;padding:0;margin:0;border:0;bord
 @media(hover:hover){button.icon:hover{color:var(--ink);background:var(--paper-deep)}.well button.icon:hover{background:var(--paper)}}
 ol.path{list-style:none;margin:0;padding:0 0 0 1.75rem}
 ol.path li{position:relative;display:grid;grid-template-columns:6.4rem minmax(0,1fr) auto;column-gap:.75rem;align-items:baseline;padding:.4rem 0}
-ol.path .n{position:absolute;left:calc(.5px - 1.75rem);top:calc(.4rem + 6px);width:11px;height:11px;border:1.5px solid var(--ink);background:var(--paper)}
-ol.path li::before,ol.path li::after{content:"";position:absolute;left:calc(7px - 1.75rem);border-left:1px dashed var(--bark)}
-ol.path li::before{top:0;height:calc(.4rem + 6px)}
+ol.path .n{position:absolute;left:-1.75rem;top:calc(.4rem + 6px);width:11px;height:11px;border:1.5px solid var(--ink);background:var(--paper)}
+ol.path li::before,ol.path li::after{content:"";position:absolute;left:calc(5px - 1.75rem);border-left:1px dashed var(--bark)}
+ol.path li::before{top:0;height:calc(.4rem + 3px)}
 ol.path li::after{top:calc(.4rem + 20px);bottom:0}
 ol.path li:first-child::before,ol.path li:last-child::after{display:none}
 ol.path li.now .n{background:var(--seal);border-color:var(--seal)}

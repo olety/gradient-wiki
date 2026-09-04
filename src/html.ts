@@ -196,25 +196,113 @@ export function manualHtml(text: string): string {
   return out.join("\n");
 }
 
-/** The raw manual with light marks: verbs and caps headings bold, placeholders set off. Still the exact text. */
-function rawHtml(text: string): string {
-  return esc(text.replace(/\s+$/, "")).split("\n").map((l) => {
-    if (/^[A-Z][A-Z ]+$/.test(l)) return `<b>${l}</b>`;
+// ---- the agent side -------------------------------------------------------------------------------
+//
+// The text a client without a browser gets at an address, shown exactly, with one addition for the
+// person reading it: every address an agent could fetch from here is a link, and the link keeps the
+// agent side, so a person can walk the site the way an agent does. A write URL, a URL with a
+// placeholder in it, or one carrying a key is never a link.
+
+type Kind = "manual" | "feed" | "list" | "page" | "history" | "log" | "alive" | "text";
+
+/** Query keys a read may carry. A same-site address with any other key is a write or a secret. */
+const READ_KEYS = new Set(["n", "before", "ns", "by", "rev", "all", "a", "b", "wait", "since", "search", "view"]);
+const URL_RE = /https?:\/\/[^\s"')\]]+/g;
+
+/** What an address answers with, and the namespace and slug in it, read off its path. */
+function kindOf(path: string): { kind: Kind; ns?: string; slug?: string } {
+  if (path === "/" || path === "/manual") return { kind: "manual" };
+  if (path === "/changes") return { kind: "feed" };
+  if (path === "/log") return { kind: "log" };
+  let m = /^\/alive\/([^/]+)$/.exec(path);
+  if (m) return { kind: "alive", ns: m[1] };
+  m = /^\/p\/([^/]+)$/.exec(path);
+  if (m) return { kind: "list", ns: m[1] };
+  m = /^\/p\/([^/]+)\/(.+?)(\/history)?$/.exec(path);
+  if (m) return { kind: m[3] ? "history" : "page", ns: m[1], slug: m[2] };
+  return { kind: "text" };
+}
+
+/** The href the agent side gives an address, or null when it must stay text. Same-site links keep the agent side. */
+function agentHref(base: string, url: string): string | null {
+  if (/[<>]/.test(url)) return null;
+  let u: URL;
+  try { u = new URL(url, base); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (u.origin !== new URL(base).origin) return esc(u.href);
+  if (/\/edit$/.test(u.pathname) || u.pathname === "/ns/new") return null; // forms and creation are not reads
+  for (const k of u.searchParams.keys()) if (!READ_KEYS.has(k)) return null;
+  u.searchParams.delete("view");
+  return agentUrl(esc(u.href.replace(/\?$/, "")));
+}
+
+/** `label` as a link to `url` when the agent side may link it, otherwise as text. */
+function alink(base: string, url: string, label = url): string {
+  const h = agentHref(base, url);
+  if (!h) return esc(label);
+  return `<a href="${h}"${h.startsWith(esc(base)) ? "" : ' rel="nofollow ugc"'}>${esc(label)}</a>`;
+}
+
+/** Runs `wrap` over every match of `re` in `text` and `plain` over the rest. */
+function mark(text: string, re: RegExp, wrap: (m: RegExpExecArray) => string, plain: (s: string) => string): string {
+  let out = "", i = 0, m: RegExpExecArray | null;
+  re.lastIndex = 0;
+  while ((m = re.exec(text))) { out += plain(text.slice(i, m.index)) + wrap(m); i = m.index + m[0].length; }
+  return out + plain(text.slice(i));
+}
+
+/** Text with every linkable address a link. `ph` also sets placeholders like <ns> off, for the manual. */
+function linkUrls(base: string, text: string, ph = false): string {
+  const plain = (s: string) => ph ? esc(s).replace(/&lt;([a-z][a-z-]*)&gt;/g, '<i class="ph">&lt;$1&gt;</i>') : esc(s);
+  return mark(text, URL_RE, (m) => {
+    const url = m[0].replace(/[.,;:!?]+$/, "");
+    return (agentHref(base, url) ? alink(base, url) : plain(url)) + esc(m[0].slice(url.length));
+  }, plain);
+}
+
+/** The manual with light marks: verbs and caps headings bold, placeholders set off, addresses linked. Still the exact text. */
+function rawManual(base: string, text: string): string {
+  return text.split("\n").map((l) => {
+    if (/^[A-Z][A-Z ]+$/.test(l)) return `<b>${esc(l)}</b>`;
     const m = /^([A-Z][A-Z ]*[A-Z])(\s{2,})(.*)$/.exec(l);
-    const body = (m ? m[3]! : l).replace(/&lt;([a-z][a-z-]*)&gt;/g, '<i class="ph">&lt;$1&gt;</i>');
-    return m ? `<b>${m[1]}</b>${m[2]}${body}` : body;
+    const body = linkUrls(base, m ? m[3]! : l, true);
+    return m ? `<b>${esc(m[1]!)}</b>${m[2]}${body}` : body;
   }).join("\n");
 }
 
-/**
- * The agent side of the switch, for any address: the text a client without a browser gets there,
- * shown as it is inside the sheet. The manual keeps its light marks and its columns; everything else wraps.
- */
-export function agentView(base: string, human: string, body: string, isManual: boolean): string {
+/** The body of the agent side: the exact text, with the links each kind of text can carry. */
+function agentBody(base: string, path: string, body: string, ok: boolean): string {
+  const { kind, ns, slug } = ok ? kindOf(path) : { kind: "text" as Kind };
+  const text = body.replace(/\s+$/, "");
+  const page = (n: string, s: string, label: string) => alink(base, `${base}/p/${n}/${s}`, label);
+  const lines = (f: (l: string) => string | null) => text.split("\n").map((l) => f(l) ?? linkUrls(base, l)).join("\n");
+  switch (kind) {
+    case "manual":
+      return rawManual(base, text);
+    case "feed":
+    case "log":
+      return lines((l) => { const m = /^(\S+) ([a-z0-9-]+)\/(\S+)(.*)$/.exec(l); return m && `${esc(m[1]!)} ${page(m[2]!, m[3]!, `${m[2]}/${m[3]}`)}${esc(m[4]!)}`; });
+    case "list":
+      return lines((l) => { const m = /^(\S+) rev (\d+) (.*)$/.exec(l); return m && `${page(ns!, m[1]!, m[1]!)} rev ${m[2]} ${esc(m[3]!)}`; });
+    case "history":
+      return lines((l) => { const m = /^rev (\d+) (.*)$/.exec(l); return m && `${alink(base, `${base}/p/${ns}/${slug}?rev=${m[1]}`, `rev ${m[1]}`)} ${esc(m[2]!)}`; });
+    case "alive":
+      return lines((l) => { const m = /^(\S+) (\S+) (.*)$/.exec(l); return m && `${esc(m[1]!)} ${page(ns!, m[2]!, m[2]!)} ${esc(m[3]!)}`; });
+    case "page":
+      // markdown link targets that are site paths are links too
+      return mark(text, /https?:\/\/[^\s"')\]]+|\]\(\/[^\s)]*\)/g, (m) => m[0].startsWith("](") ? `](${alink(base, m[0].slice(2, -1))})` : linkUrls(base, m[0]), esc);
+    default:
+      return linkUrls(base, text);
+  }
+}
+
+/** The agent side of the switch for any address. The manual keeps its columns; everything else wraps. */
+export function agentView(base: string, human: string, body: string, ok: boolean): string {
   const u = new URL(human);
   const path = u.pathname + u.search;
+  const manual = ok && kindOf(u.pathname).kind === "manual";
   return layout(base, { title: `${u.host}${path} · agent view`, description: `The text an agent gets at ${human}.`, url: human, agent: true },
-    `<div class="head"><div class="h1row"><h1><span class="nsl">${esc(u.host)}</span>${esc(path)}</h1>${copyButton("#agent-text")}</div></div><pre id="agent-text" class="raw${isManual ? " cols" : ""}">${isManual ? rawHtml(body) : esc(body)}</pre>`);
+    `<div class="head"><div class="h1row"><h1><span class="nsl">${esc(u.host)}</span>${esc(path)}</h1>${copyButton("#agent-text")}</div></div><pre id="agent-text" class="raw${manual ? " cols" : ""}">${agentBody(base, u.pathname, body, ok)}</pre>`);
 }
 
 // ---- pages --------------------------------------------------------------------------------------

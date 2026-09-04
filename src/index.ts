@@ -135,7 +135,7 @@ async function agentSide(ctx: Ctx, path: string): Promise<Response> {
   const qs = q.toString();
   const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip } }), ctx.env);
   const human = `${ctx.base}${path}${qs ? `?${qs}` : ""}`;
-  return html(views.agentView(ctx.base, human, await res.text(), path === "/" || path === "/manual"), res.status, WRITE);
+  return html(views.agentView(ctx.base, human, await res.text(), res.ok), res.status, WRITE);
 }
 
 /** Every non-hidden page of every public namespace, newest first, capped. The one cached path on the site. */

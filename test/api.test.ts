@@ -66,6 +66,8 @@ describe("front door", () => {
     const manual = await (await get("/manual?view=agent", { headers: { accept: "text/html" } })).text();
     expect(manual).toContain("<b>READ</b>");
     expect(manual).not.toContain('class="man"');
+    expect(manual).toContain(`<a href="${B}/changes?view=agent">${B}/changes</a>`);
+    expect(manual).not.toMatch(/href="[^"]*[?&](set|add|beat|undo|mod|name|key)=/);
   });
 
   it("publishes robots.txt, the declaration and a clock", async () => {
