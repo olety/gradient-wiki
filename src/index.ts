@@ -5,7 +5,7 @@ import type { Change, Env, ModAction, Page, RedactResult } from "./types";
 import { iso } from "./types";
 import { manual } from "./manual";
 import * as views from "./html";
-import { rss } from "./rss";
+import { rss, sitemap } from "./rss";
 import { looksLikeSecret } from "./secrets";
 import { unifiedDiff } from "./diff";
 import { parseFrontMatter } from "./frontmatter";
@@ -19,7 +19,10 @@ const NS_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const RESERVED_NS = new Set(["new", "alive", "changes", "log", "p", "ns", "time", "manual"]);
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$/;
 const ACTIONS = new Set(["history", "diff", "edit"]);
-const SIZE = { getWrite: 16 * 1024, bodyWrite: 1024 * 1024, by: 64, note: 200, id: 64, runid: 64, waitMax: 25, pageMax: 100, listMax: 200 };
+const SIZE = {
+  getWrite: 16 * 1024, bodyWrite: 1024 * 1024, by: 64, note: 200, id: 64, runid: 64, waitMax: 25, pageMax: 100, listMax: 200,
+  sitemap: 5000, exportBatch: 25, exportMax: 50 * 1024 * 1024,
+};
 const RATE = { ipWrite: 30, keyWrite: 120, nsWrite: 600, ipRead: 600 };
 const MINUTE = 60_000;
 const ROBOTS = `User-agent: *
@@ -36,7 +39,7 @@ Disallow: /*/edit
 Disallow: /ns/new
 `;
 
-type Format = "md" | "json" | "html" | "rss";
+type Format = "md" | "json" | "jsonl" | "html" | "rss";
 
 interface Ctx {
   req: Request;
@@ -62,7 +65,7 @@ export default {
 
 async function route(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
-  const m = /^(.*?)\.(md|json|html|rss)$/.exec(url.pathname);
+  const m = /^(.*?)\.(md|json|jsonl|html|rss)$/.exec(url.pathname);
   const path = m ? m[1]! : url.pathname;
   const suffix = m ? (m[2] as Format) : null;
   const wantsHtml = (req.headers.get("accept") ?? "").includes("text/html");
@@ -79,7 +82,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (path === "/") return ctx.fmt === "html" ? front(ctx) : text(manual(env, ctx.base));
   if (path === "/manual" || path === "/llms.txt") return text(manual(env, ctx.base));
   if (path === "/time") return text(`${iso(Date.now())} ${Date.now()}\n`);
-  if (path === "/robots.txt") return text(ROBOTS);
+  if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);
+  if (path === "/sitemap.xml") return sitemapRoute(ctx);
   if (path === "/.well-known/gradient-wiki") return json(declaration(ctx));
   if (path === "/changes") return changes(ctx);
   if (path === "/log") return log(ctx);
@@ -112,6 +116,20 @@ async function front(ctx: Ctx): Promise<Response> {
   return html(views.frontPage(ctx.base, manual(ctx.env, ctx.base), changes));
 }
 
+/** Every non-hidden page of every public namespace, newest first, capped. The one cached path on the site. */
+async function sitemapRoute(ctx: Ctx): Promise<Response> {
+  const over = await limit(ctx.env, await ipBucket(ctx), RATE.ipRead);
+  if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
+  const names = await firehose(ctx.env).namespaces();
+  const lists = await Promise.all(names.map(async (ns) => {
+    const { pages } = await namespace(ctx.env, ns).list({ all: false, n: SIZE.sitemap });
+    return pages.map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
+  }));
+  const pages = lists.flat().sort((a, b) => b.date - a.date).slice(0, SIZE.sitemap);
+  const fixed = ["/", "/manual", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));
+  return xml(sitemap([...fixed, ...pages]), { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=600" });
+}
+
 // ---- namespaces -------------------------------------------------------------------------------
 
 async function nsNew(ctx: Ctx): Promise<Response> {
@@ -119,7 +137,7 @@ async function nsNew(ctx: Ctx): Promise<Response> {
   const name = (p.get("name") ?? "").trim();
   if (!NS_RE.test(name)) return fail(400, "namespace names are [a-z0-9-], 1 to 32 characters, starting with a letter or digit.");
   if (name === "lobby" || RESERVED_NS.has(name)) return fail(409, `namespace ${name} exists.`);
-  const limited = await writeLimits(ctx, name, null);
+  const limited = await writeGate(ctx, name, null);
   if (limited) return limited;
   const key = randomHex(16);
   const isPrivate = p.get("private") === "1";
@@ -134,6 +152,7 @@ async function nsNew(ctx: Ctx): Promise<Response> {
 async function nsList(ctx: Ctx, ns: string): Promise<Response> {
   const gate = await openNamespace(ctx, ns, await params(ctx));
   if (gate instanceof Response) return gate;
+  if (ctx.fmt === "jsonl") return exportNs(ctx, ns, gate.stub);
   const q = ctx.url.searchParams;
   const n = clampInt(q.get("n"), 50, 1, SIZE.listMax);
   const before = q.get("before") ? Number(q.get("before")) : undefined;
@@ -155,6 +174,34 @@ async function nsList(ctx: Ctx, ns: string): Promise<Response> {
       return text(lines.join("\n") + "\n");
     }
   }
+}
+
+/**
+ * The whole namespace as newline-delimited JSON, streamed in slug order: every revision of a
+ * page, then its rows. This is the "take it all with you" guarantee, so nothing is summarised.
+ * Past 50 MB the stream ends with `{"truncated":true}`.
+ */
+function exportNs(ctx: Ctx, ns: string, stub: DurableObjectStub<Namespace>): Response {
+  const enc = new TextEncoder();
+  let after = "";
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { lines, next } = await stub.dump(after, SIZE.exportBatch);
+      for (const line of lines) {
+        const chunk = enc.encode(JSON.stringify({ ns, ...line, at: iso(line.at) }) + "\n");
+        if (sent + chunk.length > SIZE.exportMax) {
+          controller.enqueue(enc.encode('{"truncated":true}\n'));
+          return controller.close();
+        }
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      }
+      if (next === null) controller.close();
+      else after = next;
+    },
+  });
+  return new Response(body, { headers: headers({ "content-type": "application/x-ndjson; charset=utf-8" }) });
 }
 
 async function aliveRoute(ctx: Ctx, ns: string): Promise<Response> {
@@ -199,7 +246,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   if (p.has("mod")) return moderate(ctx, stub, ns, slug, p, pageUrl, isPrivate);
 
   if (p.has("undo")) {
-    const limited = await writeLimits(ctx, ns, keyHash);
+    const limited = await writeGate(ctx, ns, keyHash);
     if (limited) return limited;
     const r = await stub.undo(slug, await sha256Hex(p.get("undo") ?? ""));
     if (!("rev" in r)) return fail(401, "undo token invalid or expired (24h)");
@@ -211,7 +258,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     if (!open && !(keyHash && (await stub.checkKey(keyHash)))) {
       return fail(401, keyHash ? "wrong key." : `namespace ${ns} needs ?key=<key> to write. the lobby namespace needs none.`);
     }
-    const limited = await writeLimits(ctx, ns, keyHash);
+    const limited = await writeGate(ctx, ns, keyHash);
     if (limited) return limited;
     return write(ctx, stub, ns, slug, intent, p, pageUrl, isPrivate);
   }
@@ -409,7 +456,11 @@ async function log(ctx: Ctx): Promise<Response> {
 
 // ---- limits -----------------------------------------------------------------------------------
 
-async function writeLimits(ctx: Ctx, ns: string, keyHash: string | null): Promise<Response | null> {
+/** Every write path passes here: the pause switch first (a limit of zero), then the token buckets. */
+async function writeGate(ctx: Ctx, ns: string, keyHash: string | null): Promise<Response | null> {
+  if (ctx.env.PAUSE_WRITES === "1") {
+    return text(`writes paused: ${ctx.env.PAUSE_MESSAGE || "back soon"}\n`, 503, { "retry-after": "300", ...WRITE });
+  }
   const checks: Array<[string, number, string]> = [
     [await ipBucket(ctx), RATE.ipWrite, `${RATE.ipWrite} writes a minute per IP`],
     [`ns:${ns}`, RATE.nsWrite, `${RATE.nsWrite} writes a minute per namespace`],
@@ -503,8 +554,8 @@ function html(body: string, status = 200, extra?: Record<string, string>): Respo
   return new Response(body, { status, headers: headers({ "content-type": "text/html; charset=utf-8", ...extra }) });
 }
 
-function xml(body: string): Response {
-  return new Response(body, { status: 200, headers: headers({ "content-type": "application/rss+xml; charset=utf-8" }) });
+function xml(body: string, extra?: Record<string, string>): Response {
+  return new Response(body, { status: 200, headers: headers({ "content-type": "application/rss+xml; charset=utf-8", ...extra }) });
 }
 
 function fail(status: number, message: string): Response {

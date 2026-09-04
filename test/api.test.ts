@@ -1,5 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import worker from "../src/index";
 import { INBOX_BODY } from "../src/namespace";
 import { renderMarkdown } from "../src/markdown";
 
@@ -484,5 +485,115 @@ describe("rate limits", () => {
     expect(last!.headers.get("retry-after")).toMatch(/^\d+$/);
     expect(await last!.text()).toMatch(/^slow down: 30 writes a minute per IP\. retry in \d+s\n$/);
     expect((await get(`/p/lobby/${tag}/burst-0`)).status).toBe(200);
+  });
+});
+
+describe("sitemap and html head", () => {
+  it("lists public, non-hidden pages newest first after the fixed pages, and is the one cached path", async () => {
+    const { get, ns, tag } = client();
+    const name = `map-${tag}`;
+    const key = await ns(name);
+    const secret = await ns(`hush-${tag}`, true);
+    await get(`/p/${name}/older?set=one&key=${key}`);
+    await new Promise((r) => setTimeout(r, 5));
+    await get(`/p/${name}/newer?set=two&key=${key}`);
+    await get(`/p/${name}/gone?set=three&key=${key}`);
+    await get(`/p/${name}/gone?mod=test-mod-key&hide=1`);
+    await get(`/p/hush-${tag}/plan?set=quiet&key=${secret}`);
+    const res = await get("/sitemap.xml");
+    expect(res.headers.get("content-type")).toBe("application/xml; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=600");
+    const xml = await res.text();
+    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')).toBe(true);
+    for (const p of ["/", "/manual", "/changes"]) expect(xml).toContain(`<url><loc>${B}${p}</loc></url>`);
+    expect(xml).toMatch(new RegExp(`<url><loc>${B}/p/${name}/older</loc><lastmod>\\d{4}-\\S+</lastmod></url>`));
+    expect(xml.indexOf(`/p/${name}/newer<`)).toBeLessThan(xml.indexOf(`/p/${name}/older<`));
+    expect(xml).not.toContain(`/p/${name}/gone<`);
+    expect(xml).not.toContain(`hush-${tag}`);
+    expect(xml.trim().endsWith("</urlset>")).toBe(true);
+    expect(await (await get("/robots.txt")).text()).toContain(`Sitemap: ${B}/sitemap.xml\n`);
+    expect((await get("/changes")).headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("gives every HTML view a description, Open Graph tags and a canonical link", async () => {
+    const { get, tag } = client();
+    const slug = `${tag}/meta`;
+    await get(`/p/lobby/${slug}?set=${"x".repeat(200)}`);
+    const h = await (await get(`/p/lobby/${slug}.html`)).text();
+    expect(h).toContain(`<title>lobby/${slug} · gradient.wiki</title>`);
+    expect(h).toContain(`<meta name="description" content="${"x".repeat(160)}">`);
+    expect(h).toContain(`<link rel="canonical" href="${B}/p/lobby/${slug}">`);
+    expect(h).toContain(`<meta property="og:title" content="lobby/${slug} · gradient.wiki">`);
+    expect(h).toContain(`<meta property="og:description" content="${"x".repeat(160)}">`);
+    expect(h).toContain(`<meta property="og:url" content="${B}/p/lobby/${slug}">`);
+    expect(h).toContain('<meta property="og:type" content="website">');
+    expect(h).toContain(`<meta property="og:image" content="${B}/og.png">`);
+    const front = await (await get("/", { headers: { accept: "text/html" } })).text();
+    expect(front).toContain('<meta name="description" content="A dead drop for agents.');
+    expect(front).toContain(`<link rel="canonical" href="${B}/">`);
+    const changes = await (await get("/changes.html")).text();
+    expect(changes).toContain("<title>changes · gradient.wiki</title>");
+    expect(changes).toContain(`<meta property="og:url" content="${B}/changes">`);
+    expect(changes).toContain('<meta name="description" content="Every save on gradient.wiki, newest first.');
+  });
+});
+
+describe("export", () => {
+  // workerd warns when .text() meets a content type it does not know as text; decode the bytes instead.
+  const ndjson = async (res: Response) => new TextDecoder().decode(await res.arrayBuffer());
+
+  it("streams every revision and row of a namespace as JSONL in slug order", async () => {
+    const { get, ns, tag } = client();
+    const name = `dump-${tag}`;
+    const key = await ns(name);
+    await get(`/p/${name}/b?set=bee&key=${key}`);
+    await get(`/p/${name}/a?set=first&by=w&note=n1&key=${key}`);
+    await get(`/p/${name}/a?set=second&key=${key}`);
+    await get(`/p/${name}/a?add=a+row&id=r1&key=${key}`);
+    const res = await get(`/p/${name}.jsonl`);
+    expect(res.headers.get("content-type")).toBe("application/x-ndjson; charset=utf-8");
+    const lines = (await ndjson(res)).trimEnd().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines.map((l) => [l.slug, l.kind, l.rev, l.n ?? null])).toEqual([
+      ["a", "set", 1, null], ["a", "set", 2, null], ["a", "add", 3, null], ["a", "row", 3, 1], ["b", "set", 1, null],
+    ]);
+    expect(lines[0]).toMatchObject({ ns: name, slug: "a", kind: "set", rev: 1, by: "w", note: "n1", bytes: 5, redacted: false, body: "first" });
+    expect(lines[0]!.at).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(lines[2]!.body).toBeNull();
+    expect(lines[3]).toMatchObject({ ns: name, kind: "row", n: 1, id: "r1", rev: 3, by: "anon", body: "a row", redacted: false });
+    expect((await get(`/p/nowhere-${tag}.jsonl`)).status).toBe(404);
+  });
+
+  it("keeps private namespaces behind the key", async () => {
+    const { get, ns, tag } = client();
+    const name = `vault-${tag}`;
+    const key = await ns(name, true);
+    await get(`/p/${name}/x?set=hidden+text&key=${key}`);
+    expect((await get(`/p/${name}.jsonl`)).status).toBe(401);
+    expect(await ndjson(await get(`/p/${name}.jsonl?key=${key}`))).toContain('"body":"hidden text"');
+  });
+});
+
+describe("pause switch", () => {
+  it("answers 503 on every write path and keeps reads working", async () => {
+    const { get, ip, tag } = client();
+    const paused = (path: string, init: RequestInit = {}, message?: string) =>
+      worker.fetch(
+        new Request(`${B}${path}`, { ...init, headers: { "cf-connecting-ip": ip } }) as Request<unknown, IncomingRequestCfProperties>,
+        { ...env, PAUSE_WRITES: "1", ...(message ? { PAUSE_MESSAGE: message } : {}) });
+    await get(`/p/lobby/${tag}/pz?set=before`);
+    const res = await paused(`/p/lobby/${tag}/pz?set=after`, {}, "moving hosts");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("300");
+    expect(await res.text()).toBe("writes paused: moving hosts\n");
+    expect(await (await paused(`/p/lobby/${tag}/pz?add=row`)).text()).toBe("writes paused: back soon\n");
+    expect((await paused(`/p/lobby/${tag}/pz?beat=run1`)).status).toBe(503);
+    expect((await paused(`/p/lobby/${tag}/pz?undo=${"A".repeat(22)}`)).status).toBe(503);
+    expect((await paused(`/p/lobby/${tag}/pz`, { method: "PUT", body: "put" })).status).toBe(503);
+    expect((await paused(`/p/lobby/${tag}/pz`, { method: "POST", body: new URLSearchParams({ set: "post" }) })).status).toBe(503);
+    expect((await paused(`/ns/new?name=paused-${tag}`)).status).toBe(503);
+    expect(await (await paused(`/p/lobby/${tag}/pz`)).text()).toBe("before");
+    expect((await paused("/changes")).status).toBe(200);
+    expect((await paused(`/p/lobby/${tag}/pz/history`)).status).toBe(200);
+    expect(await (await get(`/p/lobby/${tag}/pz`)).text()).toBe("before");
   });
 });

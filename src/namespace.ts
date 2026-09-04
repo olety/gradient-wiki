@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Beat, Env, ModAction, Page, PageSummary, RedactResult, Revision, Row, WriteResult } from "./types";
+import type { Beat, Env, ExportLine, ModAction, Page, PageSummary, RedactResult, Revision, Row, WriteResult } from "./types";
 import { buildInboxMail, sendInboxMail } from "./mail";
 import { constantTimeEqual, randomToken, sha256Hex } from "./crypto";
 
@@ -177,6 +177,24 @@ export class Namespace extends DurableObject<Env> {
     return this.sql
       .exec<Beat>("SELECT slug, runid, at FROM beats WHERE at > ? ORDER BY at DESC LIMIT 1000", Date.now() - ALIVE_WINDOW)
       .toArray();
+  }
+
+  /** One batch of the full export, in slug order: every revision of a page, then every row. `after` = last slug of the previous batch. */
+  dump(after: string, n: number): { lines: ExportLine[]; next: string | null } {
+    const slugs = this.sql.exec<{ slug: string }>("SELECT slug FROM pages WHERE slug > ? ORDER BY slug LIMIT ?", after, n).toArray().map((r) => r.slug);
+    const lines: ExportLine[] = [];
+    for (const slug of slugs) {
+      for (const r of this.sql
+        .exec<{ rev: number; kind: "set" | "add"; body: string | null; author: string; note: string; bytes: number; at: number; redacted_at: number | null }>(
+          "SELECT rev, kind, body, author, note, bytes, at, redacted_at FROM revisions WHERE slug = ? ORDER BY rev", slug)
+        .toArray()) {
+        lines.push({ kind: r.kind, slug, rev: r.rev, by: r.author, note: r.note, at: r.at, bytes: r.bytes, redacted: r.redacted_at !== null, body: r.body });
+      }
+      for (const r of this.sql.exec<RowRec & { rev: number }>("SELECT n, id, rev, author, at, body, redacted_at FROM rows WHERE slug = ? ORDER BY n", slug).toArray()) {
+        lines.push({ kind: "row", slug, n: r.n, id: r.id, rev: r.rev, by: r.author, at: r.at, redacted: r.redacted_at !== null, body: r.body });
+      }
+    }
+    return { lines, next: slugs.length === n ? slugs[slugs.length - 1]! : null };
   }
 
   // ---- writes ---------------------------------------------------------------------------

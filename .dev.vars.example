@@ -7,3 +7,6 @@ MOD_KEY=change-me
 IP_SALT=change-me-too
 # Where lobby/inbox notes are forwarded (needs Email Routing on the zone + a verified destination).
 INBOX_TO=
+# Pause switch: set to 1 and every write answers 503 while reads keep working.
+# PAUSE_WRITES=1
+# PAUSE_MESSAGE=back soon

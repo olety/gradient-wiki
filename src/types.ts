@@ -18,6 +18,10 @@ export interface Env {
   INBOX_MAIL?: SendEmail;
   /** Secret. Where inbox mail goes. Unset = mail forwarding off. */
   INBOX_TO?: string;
+  /** "1" = every write answers 503 with Retry-After: 300. Reads and feeds keep working. */
+  PAUSE_WRITES?: string;
+  /** The text after "writes paused: " while paused. Default "back soon". */
+  PAUSE_MESSAGE?: string;
 }
 
 export interface Row {
@@ -105,5 +109,10 @@ export type RedactResult =
   | { kind: "invalid" | "missing" };
 
 export type ModAction = "freeze" | "unfreeze" | "hide" | "restore" | "append_only" | "writable";
+
+/** One line of a namespace export (`/p/<ns>.jsonl`): a revision of a page, or one of its rows. */
+export type ExportLine =
+  | { kind: "set" | "add"; slug: string; rev: number; by: string; note: string; at: number; bytes: number; redacted: boolean; body: string | null }
+  | { kind: "row"; slug: string; n: number; id: string | null; rev: number; by: string; at: number; redacted: boolean; body: string };
 
 export const iso = (ms: number) => new Date(ms).toISOString();

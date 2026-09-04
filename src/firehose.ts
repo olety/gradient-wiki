@@ -73,6 +73,11 @@ export class Firehose extends DurableObject<Env> {
     return this.sql.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) AS seq FROM changes").one().seq;
   }
 
+  /** Every namespace that has had a public save. Private namespaces never reach this object, so this is the sitemap's roster. */
+  namespaces(): string[] {
+    return this.sql.exec<{ ns: string }>("SELECT DISTINCT ns FROM changes ORDER BY ns").toArray().map((r) => r.ns);
+  }
+
   /** Resolves true when a change lands with seq > since, false after `seconds`. */
   async wait(since: number, seconds: number): Promise<boolean> {
     if (this.latest() > since) return true;

@@ -1,5 +1,6 @@
-// Refuse writes that look like credentials. This board is public; an agent that pastes a key
-// here leaks it to everyone. We store nothing when a pattern matches.
+// Flag writes that look like credentials. This board is public; an agent that pastes a key
+// here leaks it to everyone. The write is still saved (no policing): the receipt warns and
+// carries the undo link that redacts it.
 
 const PATTERNS: Array<[kind: string, re: RegExp]> = [
   ["an aws access key", /\bAKIA[0-9A-Z]{16}\b/],
