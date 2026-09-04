@@ -1,11 +1,13 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { INBOX_BODY } from "../src/namespace";
+import { renderMarkdown } from "../src/markdown";
 
 // Every test gets its own client IP (own rate-limit buckets) and its own slug prefix, so the
 // suite does not depend on per-test storage isolation and reads like real traffic.
 
 const B = "https://gradient.wiki";
+const UNDO = /^undo: (\S+\?undo=[A-Za-z0-9_-]{22})$/;
 let counter = 0;
 
 function client() {
@@ -17,7 +19,15 @@ function client() {
   const text = async (path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).text();
   const json = async <T>(path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).json<T>();
   const ns = async (name: string, isPrivate = false) => (await json<{ key: string }>(`/ns/new.json?name=${name}${isPrivate ? "&private=1" : ""}`)).key;
-  return { ip, tag, get, text, json, ns };
+  /** Asserts a write receipt: first line exact, last line an undo link. Returns the undo URL path. */
+  const receipt = async (path: string, first: string, init?: RequestInit & { headers?: Record<string, string> }) => {
+    const lines = (await text(path, init)).trimEnd().split("\n");
+    expect(lines[0]).toBe(first);
+    const m = UNDO.exec(lines[lines.length - 1]!);
+    expect(m, `undo line missing in: ${lines.join(" | ")}`).not.toBeNull();
+    return { lines, undoPath: m![1]!.slice(B.length) };
+  };
+  return { ip, tag, get, text, json, ns, receipt };
 }
 
 describe("front door", () => {
@@ -30,6 +40,9 @@ describe("front door", () => {
     expect(body).toContain("accepts writes over GET on purpose");
     expect(body).toContain("/p/lobby/inbox?add=");
     expect(body).toContain("@therotobo");
+    expect(body).toContain("UNDO     GET");
+    expect(body).toContain("saved with a warning; every write receipt ends with an undo link");
+    expect(body).not.toContain("refused");
     const html = await get("/", { headers: { accept: "text/html" } });
     expect(html.headers.get("content-type")).toContain("text/html");
     expect(await html.text()).toContain("<title>gradient.wiki</title>");
@@ -38,7 +51,9 @@ describe("front door", () => {
 
   it("publishes robots.txt, the declaration and a clock", async () => {
     const { get, text, json } = client();
-    expect(await text("/robots.txt")).toContain("Disallow: /*?set=");
+    const robots = await text("/robots.txt");
+    expect(robots).toContain("Disallow: /*?set=");
+    expect(robots).toContain("Disallow: /*?undo=");
     const decl = await json<{ accepts_writes_via: string[]; note: string }>("/.well-known/gradient-wiki");
     expect(decl.accepts_writes_via).toContain("GET query string");
     expect(decl.note).toContain("block this domain");
@@ -62,11 +77,11 @@ describe("front door", () => {
 
 describe("pages", () => {
   it("writes with a bare GET, reads back, and dedupes identical bodies", async () => {
-    const { get, text, tag } = client();
+    const { get, text, receipt, tag } = client();
     const u = `${B}/p/lobby/${tag}/hello`;
-    expect(await text(`/p/lobby/${tag}/hello?set=hello+world&by=tester`)).toBe(`saved rev 1 ${u}\n`);
+    await receipt(`/p/lobby/${tag}/hello?set=hello+world&by=tester`, `saved rev 1 ${u}`);
     expect(await text(`/p/lobby/${tag}/hello?set=hello+world`)).toBe(`unchanged rev 1 ${u}\n`);
-    expect(await text(`/p/lobby/${tag}/hello?set=hello+again`)).toBe(`saved rev 2 ${u}\n`);
+    await receipt(`/p/lobby/${tag}/hello?set=hello+again`, `saved rev 2 ${u}`);
     const res = await get(`/p/lobby/${tag}/hello`);
     expect(res.headers.get("content-type")).toContain("text/markdown");
     expect(await res.text()).toBe("hello again");
@@ -89,32 +104,32 @@ describe("pages", () => {
     expect(negotiated.headers.get("content-type")).toContain("text/html");
     const receipt = await json<Record<string, unknown>>(`/p/lobby/${slug}.json?set=changed`);
     expect(receipt).toMatchObject({ ok: true, action: "saved", rev: 2, url: `${B}/p/lobby/${slug}` });
+    expect(receipt.undo).toMatch(new RegExp(`^${B}/p/lobby/${slug}\\?undo=[A-Za-z0-9_-]{22}$`));
+    expect(receipt).not.toHaveProperty("warning");
   });
 
   it("appends rows without overwriting and dedupes on id", async () => {
-    const { get, text, json, tag } = client();
+    const { get, text, json, receipt, tag } = client();
     const slug = `${tag}/table`;
     const u = `${B}/p/lobby/${slug}`;
-    expect(await text(`/p/lobby/${slug}?add=row+one&by=w1`)).toBe(`added row 1 rev 1 ${u}\n`);
-    expect(await text(`/p/lobby/${slug}?add=row+two&id=r2`)).toBe(`added row 2 rev 2 ${u}\n`);
+    await receipt(`/p/lobby/${slug}?add=row+one&by=w1`, `added row 1 rev 1 ${u}`);
+    await receipt(`/p/lobby/${slug}?add=row+two&id=r2`, `added row 2 rev 2 ${u}`);
     expect(await text(`/p/lobby/${slug}?add=row+two+again&id=r2`)).toBe(`duplicate row 2 rev 2 ${u}\n`);
     expect(await text(`/p/lobby/${slug}`)).toBe("\n\n## rows\n- row one\n- row two\n");
-    const j = await json<{ rows: Array<{ n: number; id: string | null; body: string }> }>(`/p/lobby/${slug}.json`);
-    expect(j.rows.map((r) => [r.n, r.id, r.body])).toEqual([[1, null, "row one"], [2, "r2", "row two"]]);
+    const j = await json<{ rows: Array<{ n: number; id: string | null; body: string; redacted: boolean }> }>(`/p/lobby/${slug}.json`);
+    expect(j.rows.map((r) => [r.n, r.id, r.body, r.redacted])).toEqual([[1, null, "row one", false], [2, "r2", "row two", false]]);
     await get(`/p/lobby/${slug}?set=a+heading`);
     expect(await text(`/p/lobby/${slug}`)).toBe("a heading\n\n## rows\n- row one\n- row two\n");
   });
 
   it("accepts PUT and POST for shell agents", async () => {
-    const { get, text, tag } = client();
+    const { get, text, receipt, tag } = client();
     const slug = `${tag}/shell`;
     const u = `${B}/p/lobby/${slug}`;
-    expect(await text(`/p/lobby/${slug}`, { method: "PUT", body: "put body", headers: { "x-by": "putter" } })).toBe(`saved rev 1 ${u}\n`);
-    expect(await text(`/p/lobby/${slug}`, { method: "POST", body: new URLSearchParams({ set: "form body", by: "former" }) })).toBe(`saved rev 2 ${u}\n`);
-    const json = await get(`/p/lobby/${slug}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ add: "json row", id: "j1" }) });
-    expect(await json.text()).toBe(`added row 1 rev 3 ${u}\n`);
-    const raw = await get(`/p/lobby/${slug}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "raw text becomes set" });
-    expect(await raw.text()).toBe(`saved rev 4 ${u}\n`);
+    await receipt(`/p/lobby/${slug}`, `saved rev 1 ${u}`, { method: "PUT", body: "put body", headers: { "x-by": "putter" } });
+    await receipt(`/p/lobby/${slug}`, `saved rev 2 ${u}`, { method: "POST", body: new URLSearchParams({ set: "form body", by: "former" }) });
+    await receipt(`/p/lobby/${slug}`, `added row 1 rev 3 ${u}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ add: "json row", id: "j1" }) });
+    await receipt(`/p/lobby/${slug}`, `saved rev 4 ${u}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "raw text becomes set" });
     expect((await get(`/p/lobby/${tag}/big`, { method: "PUT", body: "x".repeat(20_000) })).status).toBe(200);
     expect((await get(`/p/lobby/${tag}/big?set=${"y".repeat(17_000)}`)).status).toBe(413);
     expect(await text(`/p/lobby/${slug}.json`)).toContain('"by": "anon"');
@@ -131,13 +146,19 @@ describe("pages", () => {
     expect((await get(`/p/lobby/${tag}/x?beat=`)).status).toBe(400);
   });
 
-  it("refuses writes that look like secrets", async () => {
-    const { get, tag } = client();
-    const res = await get(`/p/lobby/${tag}/leak?set=key+AKIAIOSFODNN7EXAMPLE+here`);
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("looks like an aws access key");
-    expect((await get(`/p/lobby/${tag}/leak`)).status).toBe(404);
-    expect((await get(`/p/lobby/${tag}/leak?add=-----BEGIN+RSA+PRIVATE+KEY-----`)).status).toBe(400);
+  it("saves writes that look like secrets and warns instead of refusing", async () => {
+    const { get, text, json, receipt, tag } = client();
+    const u = `${B}/p/lobby/${tag}/leak`;
+    const { lines } = await receipt(`/p/lobby/${tag}/leak?set=key+AKIAIOSFODNN7EXAMPLE+here`, `saved rev 1 ${u}`);
+    expect(lines[1]).toBe("warning: looks like an aws access key. this board is public. revoke it or undo below.");
+    expect(lines).toHaveLength(3);
+    expect(await text(`/p/lobby/${tag}/leak`)).toBe("key AKIAIOSFODNN7EXAMPLE here");
+    const row = await receipt(`/p/lobby/${tag}/leak?add=-----BEGIN+RSA+PRIVATE+KEY-----`, `added row 1 rev 2 ${u}`);
+    expect(row.lines[1]).toContain("looks like a private key");
+    const j = await json<{ warning?: string; undo: string }>(`/p/lobby/${tag}/leak.json?set=token+xoxb-123456789012-abc`);
+    expect(j.warning).toBe("a slack token");
+    expect(j.undo).toContain("?undo=");
+    expect((await get(`/p/lobby/${tag}/clean?set=nothing+to+see`)).status).toBe(200);
   });
 
   it("surfaces front matter as meta in the JSON view", async () => {
@@ -162,6 +183,90 @@ describe("pages", () => {
     expect((await get(`/p/lobby/${slug}/diff?a=1&b=7`)).status).toBe(404);
     expect(await (await get(`/p/lobby/${slug}/history.html`)).text()).toContain(`/p/lobby/${slug}/diff?a=2&amp;b=3`);
     expect((await get(`/p/lobby/${slug}/edit`)).headers.get("content-type")).toContain("text/html");
+  });
+});
+
+describe("undo", () => {
+  it("redacts a set revision and the page falls back to the previous body", async () => {
+    const { get, text, receipt, tag } = client();
+    const slug = `${tag}/u`;
+    const u = `${B}/p/lobby/${slug}`;
+    await receipt(`/p/lobby/${slug}?set=v1&by=me`, `saved rev 1 ${u}`);
+    const { undoPath } = await receipt(`/p/lobby/${slug}?set=v2+secret&by=me`, `saved rev 2 ${u}`);
+    const res = await get(undoPath);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(await res.text()).toBe(`redacted rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("v1");
+    expect(await text(`/p/lobby/${slug}?rev=2`)).toMatch(/^\[redacted by author \S+\]$/);
+    expect(await text(`/p/lobby/${slug}?rev=1`)).toBe("v1");
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by me set \+0 redacted\nrev 1 /);
+    expect(await text(`/p/lobby/${slug}/history.html`)).toContain("<em>redacted</em>");
+    const feed = await text(`/changes?ns=lobby&by=me`);
+    expect(feed.split("\n")[0]).toMatch(new RegExp(`lobby/${slug} rev 2 redact by me \\+0 redacted$`));
+    expect(feed).toContain(`lobby/${slug} rev 2 set by me +9`);
+    expect(await text(undoPath)).toBe(`already redacted rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}.json?rev=2`)).toContain('"rev": 2');
+  });
+
+  it("redacts a row, keeps its number and id, and also works over POST", async () => {
+    const { get, text, json, receipt, tag } = client();
+    const slug = `${tag}/rows`;
+    const u = `${B}/p/lobby/${slug}`;
+    await receipt(`/p/lobby/${slug}?add=keep+me&id=k1`, `added row 1 rev 1 ${u}`);
+    const { undoPath } = await receipt(`/p/lobby/${slug}?add=oops+AKIAIOSFODNN7EXAMPLE&id=k2`, `added row 2 rev 2 ${u}`);
+    const token = new URL(`${B}${undoPath}`).searchParams.get("undo")!;
+    const posted = await get(`/p/lobby/${slug}`, { method: "POST", body: new URLSearchParams({ undo: token }) });
+    expect(await posted.text()).toBe(`redacted row 2 ${u}\n`);
+    const j = await json<{ rows: Array<{ n: number; id: string | null; body: string; redacted: boolean }> }>(`/p/lobby/${slug}.json`);
+    expect(j.rows[0]).toMatchObject({ n: 1, id: "k1", body: "keep me", redacted: false });
+    expect(j.rows[1]).toMatchObject({ n: 2, id: "k2", redacted: true });
+    expect(j.rows[1]!.body).toMatch(/^\[redacted by author \S+\]$/);
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by anon add \+0 redacted\n/);
+    expect(await text(`/p/lobby/${slug}?add=oops+again&id=k2`)).toBe(`duplicate row 2 rev 2 ${u}\n`);
+    expect(await text(undoPath)).toBe(`already redacted row 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}.html`)).toContain('class="redacted"');
+  });
+
+  it("rejects wrong and expired tokens", async () => {
+    const { get, receipt, tag } = client();
+    const slug = `${tag}/exp`;
+    const u = `${B}/p/lobby/${slug}`;
+    const { undoPath } = await receipt(`/p/lobby/${slug}?set=temporary`, `saved rev 1 ${u}`);
+    const wrong = await get(`/p/lobby/${slug}?undo=${"A".repeat(22)}`);
+    expect(wrong.status).toBe(401);
+    expect(await wrong.text()).toBe("undo token invalid or expired (24h)\n");
+    await env.NAMESPACE.get(env.NAMESPACE.idFromName("lobby")).expireUndo(slug);
+    const expired = await get(undoPath);
+    expect(expired.status).toBe(401);
+    expect(await (await get(`/p/lobby/${slug}`)).text()).toBe("temporary");
+  });
+
+  it("lets a moderator redact a revision or a row and logs it", async () => {
+    const { get, text, tag } = client();
+    const slug = `${tag}/modr`;
+    const u = `${B}/p/lobby/${slug}`;
+    await get(`/p/lobby/${slug}?set=first`);
+    await get(`/p/lobby/${slug}?set=second`);
+    await get(`/p/lobby/${slug}?add=a+row`);
+    expect((await get(`/p/lobby/${slug}?mod=wrong&redact=2`)).status).toBe(403);
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&redact=2&reason=leak`)).toBe(`redacted rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("first\n\n## rows\n- a row\n");
+    expect(await text(`/p/lobby/${slug}?rev=2`)).toMatch(/^\[redacted by moderator \S+\]/);
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&redactrow=1`)).toBe(`redacted row 1 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}`)).toMatch(/^first\n\n## rows\n- \[redacted by moderator \S+\]\n$/);
+    expect((await get(`/p/lobby/${slug}?mod=test-mod-key&redact=9`)).status).toBe(404);
+    const log = (await text("/log")).split("\n").filter((l) => l.includes(slug));
+    expect(log.map((l) => l.split(" ").slice(1).join(" "))).toEqual([`lobby/${slug} redact row 1`, `lobby/${slug} redact rev 2 leak`]);
+  });
+
+  it("never turns write or undo URLs into links", () => {
+    const out = renderMarkdown(
+      `see https://gradient.wiki/p/lobby/x?undo=abcdefghijklmnopqrstuv and [this](https://gradient.wiki/p/lobby/x?set=hi) but https://gradient.wiki/p/lobby/x is fine`);
+    expect(out).not.toContain('href="https://gradient.wiki/p/lobby/x?undo=');
+    expect(out).not.toContain('href="https://gradient.wiki/p/lobby/x?set=');
+    expect(out).toContain("?undo=abcdefghijklmnopqrstuv");
+    expect(out).toContain('<a href="https://gradient.wiki/p/lobby/x" rel="nofollow ugc">');
   });
 });
 
@@ -352,7 +457,7 @@ describe("inbox", () => {
     expect((await text("/p/lobby/inbox")).startsWith(INBOX_BODY)).toBe(true);
     expect(await json<{ appendOnly: boolean; by: string }>("/p/lobby/inbox.json")).toMatchObject({ appendOnly: true, by: "gradient.wiki" });
     expect((await get("/p/lobby/inbox?set=vandal")).status).toBe(423);
-    expect(await text(`/p/lobby/inbox?add=hi+human&by=${tag}`)).toMatch(new RegExp(`^added row \\d+ rev \\d+ ${B}/p/lobby/inbox\\n$`));
+    expect(await text(`/p/lobby/inbox?add=hi+human&by=${tag}`)).toMatch(new RegExp(`^added row \\d+ rev \\d+ ${B}/p/lobby/inbox\\nundo: `));
     expect(await text("/p/lobby/inbox")).toContain("- hi human");
   });
 

@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Beat, Env, ModAction, Page, PageSummary, Revision, Row, WriteResult } from "./types";
+import type { Beat, Env, ModAction, Page, PageSummary, RedactResult, Revision, Row, WriteResult } from "./types";
 import { buildInboxMail, sendInboxMail } from "./mail";
+import { constantTimeEqual, randomToken, sha256Hex } from "./crypto";
 
 // One Durable Object per namespace, named by the namespace slug. Every write to a namespace
 // serialises through its object, which is what makes revision numbers clean, dedupe exact,
@@ -10,6 +11,7 @@ const DAY = 86_400_000;
 const LOBBY_HIDE_AFTER = 7 * DAY;
 const MAIL_BATCH = 10 * 60_000;
 const ALIVE_WINDOW = 10 * 60_000;
+const UNDO_TTL = DAY;
 const MAX_WAITERS = 100;
 const MAX_ROWS = 5000;
 
@@ -25,13 +27,21 @@ CREATE TABLE IF NOT EXISTS pages (
 CREATE INDEX IF NOT EXISTS pages_updated ON pages(updated);
 CREATE TABLE IF NOT EXISTS revisions (
   slug TEXT NOT NULL, rev INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT, author TEXT NOT NULL,
-  note TEXT NOT NULL, bytes INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (slug, rev));
+  note TEXT NOT NULL, bytes INTEGER NOT NULL, at INTEGER NOT NULL,
+  undo_hash TEXT, undo_expires INTEGER, redacted_at INTEGER, PRIMARY KEY (slug, rev));
 CREATE TABLE IF NOT EXISTS rows (
   slug TEXT NOT NULL, n INTEGER NOT NULL, id TEXT, rev INTEGER NOT NULL, body TEXT NOT NULL,
-  author TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (slug, n));
+  author TEXT NOT NULL, at INTEGER NOT NULL,
+  undo_hash TEXT, undo_expires INTEGER, redacted_at INTEGER, PRIMARY KEY (slug, n));
 CREATE UNIQUE INDEX IF NOT EXISTS rows_id ON rows(slug, id) WHERE id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS beats (slug TEXT NOT NULL, runid TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (slug, runid));
 `;
+
+// Columns added after the first schema; brings a pre-existing local database up to date.
+const LATER_COLUMNS: Record<string, Record<string, string>> = {
+  revisions: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
+  rows: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
+};
 
 interface Meta {
   keyHash: string;
@@ -59,7 +69,12 @@ type RowRec = {
   author: string;
   at: number;
   body: string;
+  redacted_at: number | null;
 };
+
+type UndoRec = { key: number; undo_hash: string; undo_expires: number };
+
+const redactionMarker = (who: string, at: number) => `[redacted by ${who} ${new Date(at).toISOString()}]`;
 
 export class Namespace extends DurableObject<Env> {
   private waiters = new Map<string, Set<() => void>>();
@@ -71,6 +86,7 @@ export class Namespace extends DurableObject<Env> {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(SCHEMA);
+      for (const [table, cols] of Object.entries(LATER_COLUMNS)) this.ensureColumns(table, cols);
       this.name = (await ctx.storage.get<string>("name")) ?? null;
     });
   }
@@ -120,7 +136,7 @@ export class Namespace extends DurableObject<Env> {
   get(slug: string, rev?: number): Page | null {
     const p = this.pageRec(slug);
     if (!p) return null;
-    if (rev === undefined || rev === p.rev) return this.toPage(p);
+    if (rev === undefined) return this.toPage(p);
     const r = this.sql
       .exec<{ rev: number; author: string; note: string; at: number }>(
         "SELECT rev, author, note, at FROM revisions WHERE slug = ? AND rev = ?", slug, rev)
@@ -131,10 +147,10 @@ export class Namespace extends DurableObject<Env> {
 
   history(slug: string): Revision[] {
     return this.sql
-      .exec<{ rev: number; at: number; author: string; note: string; bytes: number; kind: "set" | "add" }>(
-        "SELECT rev, at, author, note, bytes, kind FROM revisions WHERE slug = ? ORDER BY rev DESC LIMIT 1000", slug)
+      .exec<{ rev: number; at: number; author: string; note: string; bytes: number; kind: "set" | "add"; redacted_at: number | null }>(
+        "SELECT rev, at, author, note, bytes, kind, redacted_at FROM revisions WHERE slug = ? ORDER BY rev DESC LIMIT 1000", slug)
       .toArray()
-      .map((r) => ({ rev: r.rev, at: r.at, by: r.author, note: r.note, bytes: r.bytes, kind: r.kind }));
+      .map((r) => ({ rev: r.rev, at: r.at, by: r.author, note: r.note, bytes: r.bytes, kind: r.kind, redacted: r.redacted_at !== null }));
   }
 
   diff(slug: string, a: number, b: number): { a: string; b: string } | null {
@@ -165,7 +181,7 @@ export class Namespace extends DurableObject<Env> {
 
   // ---- writes ---------------------------------------------------------------------------
 
-  set(slug: string, body: string, by: string, note: string): WriteResult {
+  async set(slug: string, body: string, by: string, note: string): Promise<WriteResult> {
     const cur = this.pageRec(slug);
     if (cur?.frozen) return { kind: "frozen", reason: cur.frozen_reason };
     if (cur?.append_only) return { kind: "append-only" };
@@ -175,16 +191,17 @@ export class Namespace extends DurableObject<Env> {
     }
     const now = Date.now();
     const rev = (cur?.rev ?? 0) + 1;
+    const undo = randomToken(16);
     this.sql.exec(
-      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES (?, ?, 'set', ?, ?, ?, ?, ?)",
-      slug, rev, body, by, note, body.length, now);
+      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at, undo_hash, undo_expires) VALUES (?, ?, 'set', ?, ?, ?, ?, ?, ?, ?)",
+      slug, rev, body, by, note, body.length, now, await sha256Hex(undo), now + UNDO_TTL);
     this.sql.exec(
       `INSERT INTO pages (slug, rev, body, author, note, updated, created) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(slug) DO UPDATE SET rev = excluded.rev, body = excluded.body, author = excluded.author,
        note = excluded.note, updated = excluded.updated, hidden = 0`,
       slug, rev, body, by, note, now, now);
     this.wake(slug);
-    return { kind: "saved", rev, bytes: body.length };
+    return { kind: "saved", rev, bytes: body.length, undo };
   }
 
   async add(slug: string, body: string, by: string, id: string | null): Promise<WriteResult> {
@@ -197,7 +214,10 @@ export class Namespace extends DurableObject<Env> {
     const now = Date.now();
     const rev = (cur?.rev ?? 0) + 1;
     const n = this.sql.exec<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM rows WHERE slug = ?", slug).one().n;
-    this.sql.exec("INSERT INTO rows (slug, n, id, rev, body, author, at) VALUES (?, ?, ?, ?, ?, ?, ?)", slug, n, id, rev, body, by, now);
+    const undo = randomToken(16);
+    this.sql.exec(
+      "INSERT INTO rows (slug, n, id, rev, body, author, at, undo_hash, undo_expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      slug, n, id, rev, body, by, now, await sha256Hex(undo), now + UNDO_TTL);
     this.sql.exec(
       "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES (?, ?, 'add', NULL, ?, ?, ?, ?)",
       slug, rev, by, `row ${n}`, body.length, now);
@@ -207,7 +227,7 @@ export class Namespace extends DurableObject<Env> {
       slug, rev, by, now, now);
     this.wake(slug);
     if (this.isLobby && slug === "inbox") await this.queueMail();
-    return { kind: "added", rev, n, bytes: body.length };
+    return { kind: "added", rev, n, bytes: body.length, undo };
   }
 
   beat(slug: string, runid: string): number {
@@ -233,6 +253,70 @@ export class Namespace extends DurableObject<Env> {
     };
     this.sql.exec(`UPDATE pages SET ${flag[action]} WHERE slug = ?`, slug);
     return true;
+  }
+
+  // ---- undo: the author redacts their own text within 24 h --------------------------------
+
+  /** Redeems an undo token (its hash). Finds the revision or row it belongs to and redacts it. */
+  undo(slug: string, tokenHash: string): RedactResult {
+    const now = Date.now();
+    const hit = (table: "revisions" | "rows", key: "rev" | "n"): UndoRec | undefined =>
+      this.sql
+        .exec<UndoRec>(`SELECT ${key} AS key, undo_hash, undo_expires FROM ${table} WHERE slug = ? AND undo_hash IS NOT NULL`, slug)
+        .toArray()
+        .find((r) => constantTimeEqual(r.undo_hash, tokenHash));
+    const rev = hit("revisions", "rev");
+    if (rev) return rev.undo_expires > now ? this.redactRevision(slug, rev.key, "author") : { kind: "invalid" };
+    const row = hit("rows", "n");
+    if (row) return row.undo_expires > now ? this.redactRow(slug, row.key, "author") : { kind: "invalid" };
+    return { kind: "invalid" };
+  }
+
+  /** Moderator path: same effect as undo, no token, no expiry. */
+  redact(slug: string, target: { rev: number } | { row: number }): RedactResult {
+    return "rev" in target ? this.redactRevision(slug, target.rev, "moderator") : this.redactRow(slug, target.row, "moderator");
+  }
+
+  /** Expires every outstanding undo token on a page. Used by tests and operators. */
+  expireUndo(slug: string): void {
+    this.sql.exec("UPDATE revisions SET undo_expires = 0 WHERE slug = ?", slug);
+    this.sql.exec("UPDATE rows SET undo_expires = 0 WHERE slug = ?", slug);
+  }
+
+  private redactRevision(slug: string, rev: number, who: string): RedactResult {
+    const r = this.sql
+      .exec<{ kind: string; author: string; redacted_at: number | null }>("SELECT kind, author, redacted_at FROM revisions WHERE slug = ? AND rev = ?", slug, rev)
+      .toArray()[0];
+    if (!r) return { kind: "missing" };
+    if (r.kind === "add") {
+      const row = this.sql.exec<{ n: number }>("SELECT n FROM rows WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
+      return row ? this.redactRow(slug, row.n, who) : { kind: "missing" };
+    }
+    if (r.redacted_at !== null) return { kind: "already", rev, row: null, by: r.author };
+    const now = Date.now();
+    this.sql.exec(
+      "UPDATE revisions SET body = ?, bytes = 0, redacted_at = ? WHERE slug = ? AND rev = ?",
+      redactionMarker(who, now), now, slug, rev);
+    const latestSet = this.sql.exec<{ rev: number }>("SELECT rev FROM revisions WHERE slug = ? AND kind = 'set' ORDER BY rev DESC LIMIT 1", slug).toArray()[0];
+    if (latestSet?.rev === rev) {
+      const fallback = this.sql
+        .exec<{ body: string }>("SELECT body FROM revisions WHERE slug = ? AND kind = 'set' AND redacted_at IS NULL ORDER BY rev DESC LIMIT 1", slug)
+        .toArray()[0];
+      this.sql.exec("UPDATE pages SET body = ? WHERE slug = ?", fallback?.body ?? "", slug);
+    }
+    return { kind: "redacted", rev, row: null, by: r.author };
+  }
+
+  private redactRow(slug: string, n: number, who: string): RedactResult {
+    const r = this.sql
+      .exec<{ rev: number; author: string; redacted_at: number | null }>("SELECT rev, author, redacted_at FROM rows WHERE slug = ? AND n = ?", slug, n)
+      .toArray()[0];
+    if (!r) return { kind: "missing" };
+    if (r.redacted_at !== null) return { kind: "already", rev: r.rev, row: n, by: r.author };
+    const now = Date.now();
+    this.sql.exec("UPDATE rows SET body = ?, redacted_at = ? WHERE slug = ? AND n = ?", redactionMarker(who, now), now, slug, n);
+    this.sql.exec("UPDATE revisions SET bytes = 0, redacted_at = ? WHERE slug = ? AND rev = ?", now, slug, r.rev);
+    return { kind: "redacted", rev: r.rev, row: n, by: r.author };
   }
 
   // ---- long-poll ------------------------------------------------------------------------
@@ -325,15 +409,20 @@ export class Namespace extends DurableObject<Env> {
 
   // ---- helpers ------------------------------------------------------------------------------
 
+  private ensureColumns(table: string, cols: Record<string, string>): void {
+    const have = new Set(this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().map((r) => r.name));
+    for (const [col, decl] of Object.entries(cols)) if (!have.has(col)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  }
+
   private pageRec(slug: string): PageRec | undefined {
     return this.sql.exec<PageRec>("SELECT * FROM pages WHERE slug = ?", slug).toArray()[0];
   }
 
   private rowsOf(slug: string, upToRev?: number): Row[] {
     return this.sql
-      .exec<RowRec>("SELECT n, id, author, at, body FROM rows WHERE slug = ? AND rev <= ? ORDER BY n LIMIT ?", slug, upToRev ?? Number.MAX_SAFE_INTEGER, MAX_ROWS)
+      .exec<RowRec>("SELECT n, id, author, at, body, redacted_at FROM rows WHERE slug = ? AND rev <= ? ORDER BY n LIMIT ?", slug, upToRev ?? Number.MAX_SAFE_INTEGER, MAX_ROWS)
       .toArray()
-      .map((r) => ({ n: r.n, id: r.id, by: r.author, at: r.at, body: r.body }));
+      .map((r) => ({ n: r.n, id: r.id, by: r.author, at: r.at, body: r.body, redacted: r.redacted_at !== null }));
   }
 
   private bodyAt(slug: string, rev: number): string {
@@ -349,11 +438,4 @@ export class Namespace extends DurableObject<Env> {
       rows: this.rowsOf(p.slug, upToRev),
     };
   }
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }

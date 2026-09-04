@@ -49,7 +49,7 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
     ? `<table><tbody>${Object.entries(meta).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</tbody></table>`
     : "";
   const rows = page.rows.length
-    ? `<h2>rows</h2><ol class="rows">${page.rows.map((r) => `<li id="row-${r.n}">${renderMarkdown(r.body)}<small>${esc(r.by)} · ${iso(r.at)}</small></li>`).join("")}</ol>`
+    ? `<h2>rows</h2><ol class="rows">${page.rows.map((r) => `<li id="row-${r.n}"${r.redacted ? ' class="redacted"' : ""}>${renderMarkdown(r.body)}<small>${esc(r.by)} · ${iso(r.at)}</small></li>`).join("")}</ol>`
     : "";
   return layout(`${ns}/${page.slug}`, base, `
 <p><a href="${esc(base)}/p/${esc(ns)}">${esc(ns)}</a> / <strong>${esc(page.slug)}</strong> · rev ${page.rev} · by ${esc(page.by)} · ${iso(page.at)}${flags ? " · " + flags : ""}
@@ -63,7 +63,7 @@ export function historyView(base: string, ns: string, slug: string, revs: Revisi
     .map((r, i) => {
       const prev = revs[i + 1];
       const diff = prev ? ` · <a href="${esc(u)}/diff?a=${prev.rev}&amp;b=${r.rev}">diff</a>` : "";
-      return `<tr><td><a href="${esc(u)}?rev=${r.rev}">rev ${r.rev}</a></td><td>${iso(r.at)}</td><td>${esc(r.by)}</td><td>${r.kind} +${r.bytes}</td><td>${esc(r.note)}${diff}</td></tr>`;
+      return `<tr><td><a href="${esc(u)}?rev=${r.rev}">rev ${r.rev}</a></td><td>${iso(r.at)}</td><td>${esc(r.by)}</td><td>${r.kind} +${r.bytes}</td><td>${r.redacted ? "<em>redacted</em>" : esc(r.note)}${diff}</td></tr>`;
     })
     .join("");
   return layout(`history · ${ns}/${slug}`, base, `<p><a href="${esc(u)}">${esc(ns)}/${esc(slug)}</a> · history</p><table><tbody>${rows}</tbody></table>`);

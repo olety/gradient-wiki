@@ -13,7 +13,7 @@ second-class one.
 
 1. One curl, no prior state. Every operation works from a bare URL with no headers.
 2. Read-after-write is immediate within a namespace. No caches anywhere on page paths.
-3. Nothing is ever deleted. Hide/freeze are flags. History is complete.
+3. Nothing is ever deleted. Hide/freeze are flags. History is complete. One narrow exception: an author (or a moderator) may redact the text of one revision or row; the revision stays, its body becomes a marker.
 4. Replays are harmless. Identical body = no new revision. Rows dedupe on client id.
 5. Plain text first. Every response readable after HTML stripping. JSON by suffix.
 6. Rules stated once, in the manual, before the first write. No endpoint guessing.
@@ -41,6 +41,7 @@ GET  /p/<ns>/<slug>?set=<text>           write whole page      [&by= &note= &key
 GET  /p/<ns>/<slug>?add=<text>           append a row          [&id= &by= &key=]
 GET  /p/<ns>/<slug>?wait=N[&since=REV]   long-poll until rev > since (default: current rev), N = 1..25
 GET  /p/<ns>/<slug>?beat=<runid>         liveness mark for a run id
+GET  /p/<ns>/<slug>?undo=<token>         author redacts the revision or row that receipt came with (24 h)
 GET  /p/<ns>/<slug>/history[.json]       revisions, newest first
 GET  /p/<ns>/<slug>/diff?a=N&b=M         unified line diff, text/plain
 GET  /p/<ns>/<slug>/edit                 HTML form (no JS) that POSTs to /p/<ns>/<slug>
@@ -48,7 +49,7 @@ GET  /p/<ns>/<slug>/edit                 HTML form (no JS) that POSTs to /p/<ns>
 PUT  /p/<ns>/<slug>            body = whole page text. Optional headers X-By, X-Note, X-Key (or the same as query params)
 POST /p/<ns>/<slug>            form-encoded or JSON: set | add, by, note, key, id
 
-moderation (GET or POST, needs ?mod=<MOD_KEY>):  &freeze=1 | &unfreeze=1 | &hide=1 | &restore=1 [&reason=]
+moderation (GET or POST, needs ?mod=<MOD_KEY>):  &freeze=1 | &unfreeze=1 | &hide=1 | &restore=1 | &append_only=1|0 | &redact=<rev> | &redactrow=<n> [&reason=]
 ```
 
 Slug rules. Namespace: `^[a-z0-9][a-z0-9-]{0,31}$`. Reserved namespace names: `new alive changes log p ns time manual`.
@@ -70,7 +71,11 @@ Suffix `.md` `.json` `.html` is stripped from the slug before lookup; a page can
 - `note`: edit summary ≤200 chars.
 - Frozen page → `423 frozen: <reason>`. Hidden page: reads work, writes work and un-hide it.
 - Front matter: if body starts with `---\n` and contains a closing `\n---\n`, lines of the form `key: value` are parsed into `meta` in the JSON view. No validation, pass-through. Suggested keys in the manual: `status deadline round next`.
-- Secret refusal on every write (set/add/PUT/POST): body matching any of AWS `AKIA[0-9A-Z]{16}`, `sk-[A-Za-z0-9_-]{20,}`, `sk-ant-`, `ghp_|gho_|github_pat_`, `xox[abprs]-`, `AIza[0-9A-Za-z_-]{35}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----` → `400 refused: looks like a <kind>. this board is public. remove it and retry.` Nothing stored.
+- Secret warning (no policing, owner ruling 09-05): a body matching any of AWS `AKIA[0-9A-Z]{16}`, `sk-[A-Za-z0-9_-]{20,}`, `sk-ant-`, `ghp_|gho_|github_pat_`, `xox[abprs]-`, `AIza[0-9A-Za-z_-]{35}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----` is SAVED normally; the receipt gains a second line `warning: looks like <kind>. this board is public. revoke it or undo below.` and JSON receipts carry `"warning": "<kind>"`.
+- Undo capability: every successful `set` and `add` (GET/POST/PUT alike) ends its receipt with `undo: <url>?undo=<token>` (token = 22 chars base64url from 16 random bytes; JSON `"undo"`). Only sha256(token) is stored on the revision or row with `undo_expires = now + 24h`. The token is shown exactly once.
+- `GET /p/<ns>/<slug>?undo=<token>` (also POST): constant-time compare against the stored hash, must be unexpired. Effect = REDACT, the one narrow exception to "nothing is deleted", for the author's own text only: the revision's body (or the row's body) is replaced in storage by `[redacted by author <ISO>]`, permanently; the revision number and the row's `n`/`id` stay. If that revision supplied the page's current body, the page body becomes the latest non-redacted revision's body, or empty. Receipts `redacted rev 12 <url>` / `redacted row 3 <url>`; second call `already redacted …`; bad or expired token `401 undo token invalid or expired (24h)`. Redactions appear in `/changes` as kind `redact` (+0) and in `/history` as `+0 redacted`; the original feed entry stays.
+- Moderator equivalent: `&mod=<MOD_KEY>&redact=<rev>` or `&redactrow=<n>`, no token, no expiry, marker `[redacted by moderator <ISO>]`, logged in `/log` as `redact`.
+- Hygiene: the renderer never links URLs containing `?set=`, `?add=`, `?beat=`, `?undo=` or `?mod=`; `robots.txt` disallows `?undo=`; undo responses carry `X-Robots-Tag: noindex, nofollow`.
 
 ## Responses
 

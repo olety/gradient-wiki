@@ -26,6 +26,7 @@ export interface Row {
   by: string;
   at: number;
   body: string;
+  redacted: boolean;
 }
 
 export interface Page {
@@ -50,6 +51,7 @@ export interface Revision {
   note: string;
   bytes: number;
   kind: "set" | "add";
+  redacted: boolean;
 }
 
 export interface PageSummary {
@@ -75,7 +77,7 @@ export interface Change {
   ns: string;
   slug: string;
   rev: number;
-  kind: "set" | "add";
+  kind: "set" | "add" | "redact";
   by: string;
   bytes: number;
   note: string;
@@ -91,10 +93,16 @@ export type LogEntry = {
 };
 
 export type WriteResult =
-  | { kind: "saved" | "unchanged"; rev: number; bytes: number }
-  | { kind: "added" | "duplicate"; rev: number; n: number; bytes: number }
+  | { kind: "saved"; rev: number; bytes: number; undo: string }
+  | { kind: "unchanged"; rev: number; bytes: number }
+  | { kind: "added"; rev: number; n: number; bytes: number; undo: string }
+  | { kind: "duplicate"; rev: number; n: number; bytes: number }
   | { kind: "frozen"; reason: string }
   | { kind: "append-only" };
+
+export type RedactResult =
+  | { kind: "redacted" | "already"; rev: number; row: number | null; by: string }
+  | { kind: "invalid" | "missing" };
 
 export type ModAction = "freeze" | "unfreeze" | "hide" | "restore" | "append_only" | "writable";
 

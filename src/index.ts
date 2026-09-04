@@ -1,7 +1,7 @@
 import { Namespace } from "./namespace";
 import { Firehose } from "./firehose";
 import { Limiter } from "./limiter";
-import type { Change, Env, ModAction, Page } from "./types";
+import type { Change, Env, ModAction, Page, RedactResult } from "./types";
 import { iso } from "./types";
 import { manual } from "./manual";
 import * as views from "./html";
@@ -9,6 +9,7 @@ import { rss } from "./rss";
 import { looksLikeSecret } from "./secrets";
 import { unifiedDiff } from "./diff";
 import { parseFrontMatter } from "./frontmatter";
+import { constantTimeEqual, randomHex, sha256Hex } from "./crypto";
 
 export { Namespace, Firehose, Limiter };
 
@@ -29,6 +30,8 @@ Disallow: /*?add=
 Disallow: /*&add=
 Disallow: /*?beat=
 Disallow: /*&beat=
+Disallow: /*?undo=
+Disallow: /*&undo=
 Disallow: /*/edit
 Disallow: /ns/new
 `;
@@ -119,9 +122,9 @@ async function nsNew(ctx: Ctx): Promise<Response> {
   const limited = await writeLimits(ctx, name, null);
   if (limited) return limited;
   const key = randomHex(16);
-  const created = await namespace(ctx.env, name).create(name, await sha256(key), p.get("private") === "1");
-  if (!created) return fail(409, `namespace ${name} exists.`);
   const isPrivate = p.get("private") === "1";
+  const created = await namespace(ctx.env, name).create(name, await sha256Hex(key), isPrivate);
+  if (!created) return fail(409, `namespace ${name} exists.`);
   if (ctx.fmt === "json") return json({ ok: true, ns: name, key, private: isPrivate, url: `${ctx.base}/p/${name}` }, 200, WRITE);
   return text(
     `namespace ${name} created. key: ${key}. writes need ?key=${key}. keep it; it is not recoverable.${isPrivate ? " reads need the key too." : ""} ${ctx.base}/p/${name}\n`,
@@ -165,7 +168,7 @@ async function aliveRoute(ctx: Ctx, ns: string): Promise<Response> {
 }
 
 /** Validates the namespace, checks it exists, enforces the private-read key and the read limit. */
-async function openNamespace(ctx: Ctx, ns: string, p: Map<string, string>): Promise<Response | { stub: DurableObjectStub<Namespace>; open: boolean; keyHash: string | null }> {
+async function openNamespace(ctx: Ctx, ns: string, p: Map<string, string>): Promise<Response | { stub: DurableObjectStub<Namespace>; open: boolean; keyHash: string | null; isPrivate: boolean }> {
   if (!NS_RE.test(ns) || RESERVED_NS.has(ns)) return fail(400, "namespace names are [a-z0-9-], 1 to 32 characters.");
   const over = await limit(ctx.env, await ipBucket(ctx), RATE.ipRead);
   if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
@@ -173,9 +176,9 @@ async function openNamespace(ctx: Ctx, ns: string, p: Map<string, string>): Prom
   const info = await stub.open(ns);
   if (!info.exists) return fail(404, `no such namespace ${ns}. create it: ${ctx.base}/ns/new?name=${ns}`);
   const key = p.get("key");
-  const keyHash = key ? await sha256(key) : null;
+  const keyHash = key ? await sha256Hex(key) : null;
   if (info.private && !(keyHash && (await stub.checkKey(keyHash)))) return fail(401, `namespace ${ns} is private. add ?key=<key>.`);
-  return { stub, open: info.open, keyHash };
+  return { stub, open: info.open, keyHash, isPrivate: info.private };
 }
 
 // ---- pages ------------------------------------------------------------------------------------
@@ -190,10 +193,18 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   const p = await params(ctx);
   const gate = await openNamespace(ctx, ns, p);
   if (gate instanceof Response) return gate;
-  const { stub, open, keyHash } = gate;
+  const { stub, open, keyHash, isPrivate } = gate;
   const pageUrl = `${ctx.base}/p/${ns}/${slug}`;
 
-  if (p.has("mod")) return moderate(ctx, stub, ns, slug, p, pageUrl);
+  if (p.has("mod")) return moderate(ctx, stub, ns, slug, p, pageUrl, isPrivate);
+
+  if (p.has("undo")) {
+    const limited = await writeLimits(ctx, ns, keyHash);
+    if (limited) return limited;
+    const r = await stub.undo(slug, await sha256Hex(p.get("undo") ?? ""));
+    if (!("rev" in r)) return fail(401, "undo token invalid or expired (24h)");
+    return redactReceipt(ctx, ns, slug, r, pageUrl, isPrivate);
+  }
 
   const intent = (["set", "add", "beat"] as const).find((k) => p.has(k));
   if (intent) {
@@ -202,7 +213,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     }
     const limited = await writeLimits(ctx, ns, keyHash);
     if (limited) return limited;
-    return write(ctx, stub, ns, slug, intent, p, pageUrl);
+    return write(ctx, stub, ns, slug, intent, p, pageUrl, isPrivate);
   }
 
   if (action === "edit") return html(views.editView(ctx.base, ns, slug, await stub.get(slug), !open), 200, WRITE);
@@ -211,7 +222,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     if (!revs.length) return fail(404, `no page ${ns}/${slug}.`);
     if (ctx.fmt === "json") return json(revs.map((r) => ({ ...r, at: iso(r.at), url: `${pageUrl}?rev=${r.rev}` })));
     if (ctx.fmt === "html") return html(views.historyView(ctx.base, ns, slug, revs));
-    return text(revs.map((r) => `rev ${r.rev} ${iso(r.at)} by ${r.by} ${r.kind} +${r.bytes} ${r.note}`).join("\n") + "\n");
+    return text(revs.map((r) => `rev ${r.rev} ${iso(r.at)} by ${r.by} ${r.kind} +${r.bytes} ${r.redacted ? "redacted" : r.note}`).join("\n") + "\n");
   }
   if (action === "diff") {
     const a = Number(p.get("a"));
@@ -246,7 +257,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   }
 }
 
-async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, intent: "set" | "add" | "beat", p: Map<string, string>, pageUrl: string): Promise<Response> {
+async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, intent: "set" | "add" | "beat", p: Map<string, string>, pageUrl: string, isPrivate: boolean): Promise<Response> {
   const by = clean(p.get("by") ?? "", SIZE.by) || "anon";
   const value = p.get(intent) ?? "";
 
@@ -254,55 +265,83 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
     const runid = clean(value, SIZE.runid);
     if (!runid) return fail(400, "beat needs a run id, e.g. ?beat=run42");
     const at = await stub.beat(slug, runid);
-    return receipt(ctx, "beat", { runid, at: iso(at) }, `beat ${runid} ${iso(at)} ${ctx.base}/alive/${ns}`);
+    return receipt(ctx, "beat", { runid, at: iso(at) }, [`beat ${runid} ${iso(at)} ${ctx.base}/alive/${ns}`]);
   }
 
   const viaBody = ctx.req.method === "PUT" || ctx.req.method === "POST";
   const max = viaBody ? SIZE.bodyWrite : SIZE.getWrite;
   if (value.length === 0) return fail(400, `${intent} needs at least 1 character.`);
   if (value.length > max) return fail(413, `too large: ${value.length} chars, max ${max} ${viaBody ? "per PUT/POST" : "per GET write (use PUT or POST for up to 1 MB)"}.`);
-  const secret = looksLikeSecret(value);
-  if (secret) return fail(400, `refused: looks like ${secret}. this board is public. remove it and retry.`);
 
+  const note = clean(p.get("note") ?? "", SIZE.note);
   const result = intent === "set"
-    ? await stub.set(slug, value, by, clean(p.get("note") ?? "", SIZE.note))
+    ? await stub.set(slug, value, by, note)
     : await stub.add(slug, value, by, clean(p.get("id") ?? "", SIZE.id) || null);
 
-  const note = result.kind === "added" ? `row ${result.n}` : clean(p.get("note") ?? "", SIZE.note);
-  if (result.kind === "saved" || result.kind === "added") {
-    if (!(await stub.info()).private) {
-      await firehose(ctx.env).record({ at: Date.now(), ns, slug, rev: result.rev, kind: intent, by, bytes: result.bytes, note });
-    }
-  }
   switch (result.kind) {
     case "frozen":
       return fail(423, `frozen: ${result.reason || "this page is frozen by a moderator."}`);
     case "append-only":
       return fail(423, `append-only: use ?add= on ${ns}/${slug}.`);
-    case "saved":
-      return receipt(ctx, "saved", { rev: result.rev }, `saved rev ${result.rev} ${pageUrl}`);
     case "unchanged":
-      return receipt(ctx, "unchanged", { rev: result.rev }, `unchanged rev ${result.rev} ${pageUrl}`);
-    case "added":
-      return receipt(ctx, "added", { rev: result.rev, n: result.n }, `added row ${result.n} rev ${result.rev} ${pageUrl}`);
+      return receipt(ctx, "unchanged", { rev: result.rev }, [`unchanged rev ${result.rev} ${pageUrl}`]);
     case "duplicate":
-      return receipt(ctx, "duplicate", { rev: result.rev, n: result.n }, `duplicate row ${result.n} rev ${result.rev} ${pageUrl}`);
+      return receipt(ctx, "duplicate", { rev: result.rev, n: result.n }, [`duplicate row ${result.n} rev ${result.rev} ${pageUrl}`]);
+    case "saved":
+    case "added": {
+      if (!isPrivate) {
+        await firehose(ctx.env).record({
+          at: Date.now(), ns, slug, rev: result.rev, kind: intent, by, bytes: result.bytes,
+          note: result.kind === "added" ? `row ${result.n}` : note,
+        });
+      }
+      // No policing: a write that looks like a credential is saved and warned about. The undo
+      // link on every receipt is how the author takes it back (redacts it) within 24 hours.
+      const warning = looksLikeSecret(value);
+      const undo = `${pageUrl}?undo=${result.undo}`;
+      const lines = [result.kind === "saved" ? `saved rev ${result.rev} ${pageUrl}` : `added row ${result.n} rev ${result.rev} ${pageUrl}`];
+      if (warning) lines.push(`warning: looks like ${warning}. this board is public. revoke it or undo below.`);
+      lines.push(`undo: ${undo}`);
+      const fields = result.kind === "saved" ? { rev: result.rev } : { rev: result.rev, n: result.n };
+      return receipt(ctx, result.kind, { ...fields, ...(warning ? { warning } : {}), undo }, lines);
+    }
   }
 }
 
-async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, p: Map<string, string>, pageUrl: string): Promise<Response> {
+async function redactReceipt(ctx: Ctx, ns: string, slug: string, r: Extract<RedactResult, { rev: number }>, pageUrl: string, isPrivate: boolean): Promise<Response> {
+  const what = r.row !== null ? `row ${r.row}` : `rev ${r.rev}`;
+  if (r.kind === "redacted" && !isPrivate) {
+    await firehose(ctx.env).record({ at: Date.now(), ns, slug, rev: r.rev, kind: "redact", by: r.by, bytes: 0, note: r.row !== null ? `row ${r.row} redacted` : "redacted" });
+  }
+  const verb = r.kind === "redacted" ? "redacted" : "already redacted";
+  return receipt(ctx, verb, { rev: r.rev, row: r.row }, [`${verb} ${what} ${pageUrl}`]);
+}
+
+async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, p: Map<string, string>, pageUrl: string, isPrivate: boolean): Promise<Response> {
   const modKey = ctx.env.MOD_KEY;
   if (!modKey) return fail(403, "moderation is not enabled on this host.");
-  if (!(await constantTimeEqual(p.get("mod") ?? "", modKey))) return fail(403, "bad moderation key.");
+  if (!constantTimeEqual(p.get("mod") ?? "", modKey)) return fail(403, "bad moderation key.");
+  const reason = clean(p.get("reason") ?? "", SIZE.note);
+
+  const redactRev = Number(p.get("redact"));
+  const redactRow = Number(p.get("redactrow"));
+  if (p.has("redact") || p.has("redactrow")) {
+    const target = p.has("redact") ? { rev: redactRev } : { row: redactRow };
+    if (!Number.isInteger("rev" in target ? target.rev : target.row)) return fail(400, "redact needs &redact=<rev> or &redactrow=<n>.");
+    const r = await stub.redact(slug, target);
+    if (!("rev" in r)) return fail(404, `no such revision or row on ${ns}/${slug}.`);
+    await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "redact", reason: `${"rev" in target ? `rev ${target.rev}` : `row ${target.row}`}${reason ? ` ${reason}` : ""}` });
+    return redactReceipt(ctx, ns, slug, r, pageUrl, isPrivate);
+  }
+
   const action: ModAction | null =
     p.get("freeze") === "1" ? "freeze" : p.get("unfreeze") === "1" ? "unfreeze" :
     p.get("hide") === "1" ? "hide" : p.get("restore") === "1" ? "restore" :
     p.get("append_only") === "1" ? "append_only" : p.get("append_only") === "0" ? "writable" : null;
-  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0");
-  const reason = clean(p.get("reason") ?? "", SIZE.note);
+  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n>");
   if (!(await stub.mod(slug, action, reason))) return fail(404, `no page ${ns}/${slug}.`);
   await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
-  return receipt(ctx, action, { reason }, `${action} ${pageUrl}${reason ? ` (${reason})` : ""}`);
+  return receipt(ctx, action, { reason }, [`${action} ${pageUrl}${reason ? ` (${reason})` : ""}`]);
 }
 
 function pageJson(ctx: Ctx, ns: string, page: Page) {
@@ -311,7 +350,7 @@ function pageJson(ctx: Ctx, ns: string, page: Page) {
     ns, slug: page.slug, rev: page.rev, by: page.by, note: page.note, at: iso(page.at), created: iso(page.created),
     frozen: page.frozen, hidden: page.hidden, appendOnly: page.appendOnly,
     body: page.body, meta: parseFrontMatter(page.body),
-    rows: page.rows.map((r) => ({ n: r.n, id: r.id, by: r.by, at: iso(r.at), body: r.body })),
+    rows: page.rows.map((r) => ({ n: r.n, id: r.id, by: r.by, at: iso(r.at), body: r.body, redacted: r.redacted })),
     url, history: `${url}/history`,
   };
 }
@@ -326,7 +365,7 @@ async function changes(ctx: Ctx): Promise<Response> {
   const ns = q.get("ns") ?? undefined;
   const by = q.get("by") ?? undefined;
   if (ns && !NS_RE.test(ns)) return fail(400, "bad ?ns=");
-  const n = clampInt(q.get("n"), ctx.fmt === "rss" ? 50 : 50, 1, SIZE.pageMax);
+  const n = clampInt(q.get("n"), 50, 1, SIZE.pageMax);
   const before = q.get("before") ? Number(q.get("before")) : undefined;
   if (q.has("wait")) {
     const since = q.has("since") ? clampInt(q.get("since"), 0, 0, Number.MAX_SAFE_INTEGER) : await fh.latest();
@@ -387,7 +426,7 @@ async function limit(env: Env, bucket: string, max: number): Promise<number> {
 }
 
 async function ipBucket(ctx: Ctx): Promise<string> {
-  return `ip:${await sha256(`${ctx.env.IP_SALT ?? "dev"}:${new Date().toISOString().slice(0, 10)}:${ctx.ip}`)}`;
+  return `ip:${await sha256Hex(`${ctx.env.IP_SALT ?? "dev"}:${new Date().toISOString().slice(0, 10)}:${ctx.ip}`)}`;
 }
 
 // ---- request plumbing -------------------------------------------------------------------------
@@ -433,22 +472,6 @@ function clampInt(raw: string | null | undefined, fallback: number, min: number,
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
-function randomHex(bytes: number): string {
-  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function sha256(s: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function constantTimeEqual(a: string, b: string): Promise<boolean> {
-  const [x, y] = await Promise.all([sha256(a), sha256(b)]);
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
-  return diff === 0;
-}
-
 // ---- responses --------------------------------------------------------------------------------
 
 const WRITE = { "x-robots-tag": "noindex, nofollow" };
@@ -492,7 +515,9 @@ function tooMany(retryAfter: number, rule: string): Response {
   return text(`slow down: ${rule}. retry in ${retryAfter}s\n`, 429, { "retry-after": String(retryAfter), ...WRITE });
 }
 
-function receipt(ctx: Ctx, action: string, fields: Record<string, unknown>, line: string): Response {
-  if (ctx.fmt === "json") return json({ ok: true, action, ...fields, url: line.slice(line.lastIndexOf(" ") + 1) }, 200, WRITE);
-  return text(line + "\n", 200, WRITE);
+/** Text receipts are one line per fact; the first line always carries the page URL. JSON carries the same facts as fields. */
+function receipt(ctx: Ctx, action: string, fields: Record<string, unknown>, lines: string[]): Response {
+  const first = lines[0]!;
+  if (ctx.fmt === "json") return json({ ok: true, action, ...fields, url: first.slice(first.lastIndexOf(" ") + 1) }, 200, WRITE);
+  return text(lines.join("\n") + "\n", 200, WRITE);
 }

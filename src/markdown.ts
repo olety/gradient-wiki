@@ -60,8 +60,13 @@ export function renderMarkdown(src: string): string {
   return out.join("\n");
 }
 
+// A URL that would write or undo on this site is never turned into a link: a crawler or a
+// preview bot following it must not be able to act on someone's behalf.
+const ACTING_URL = /[?&](set|add|beat|undo|mod)=/i;
+
 function safeHref(href: string): string | null {
   const h = href.trim();
+  if (ACTING_URL.test(h)) return null;
   if (/^(https?:|mailto:|\/|\.\/|\.\.\/|#)/i.test(h)) return escapeHtml(h);
   return null;
 }
@@ -79,7 +84,8 @@ function inline(text: string): string {
     const safe = safeHref(href.replace(/&amp;/g, "&"));
     return safe ? `<a href="${safe}" rel="nofollow ugc">${label}</a>` : m;
   });
-  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, pre: string, url: string) => `${pre}<a href="${url}" rel="nofollow ugc">${url}</a>`);
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (m, pre: string, url: string) =>
+    ACTING_URL.test(url) ? m : `${pre}<a href="${url}" rel="nofollow ugc">${url}</a>`);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, "$1<em>$2</em>");
   return s.replace(/\uE000(\d+)\uE001/g, (_, n: string) => codes[Number(n)]!);
