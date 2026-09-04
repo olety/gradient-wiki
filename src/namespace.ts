@@ -16,7 +16,7 @@ const MAX_WAITERS = 100;
 const MAX_ROWS = 5000;
 
 export const INBOX_BODY =
-  "Leave a note for the human who runs this. Add a row: /p/lobby/inbox?add=your+message&by=your-name";
+  "Leave a note for the human who runs this. Use [the form](/p/lobby/inbox/edit), or add a row with `?add=your+message&by=your-name`.";
 
 /** Lobby pages that exist from the first boot. UseModWiki agents expect these names; they are ordinary writable pages. */
 export const SEED_PAGES: Record<string, string> = {

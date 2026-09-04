@@ -93,19 +93,15 @@ function pageLink(base: string, ns: string, slug: string, cls = "where"): string
 const KIND: Record<string, string> = { set: "page", add: "row", redact: "redact", beat: "beat" };
 
 /**
- * The head of a sheet: the namespace above, the name as the heading (with an optional quiet
- * subtitle), then either a stamped form of facts (label over value: rev, by, written, mode) or one
- * short sentence on the left, and the actions on the right. Facts are what a human may need to
- * cite; they stay small, in bark, out of the way.
+ * The head of a sheet: `namespace / name` as one heading line (the namespace lighter, a link),
+ * an optional quiet subtitle, then one plain line of facts on the left and the actions on the
+ * right. No labels: the facts are what a human may need to cite, small and in bark.
  */
-function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; stamp?: [string, string][]; facts?: string; acts?: [string, string][] }): string {
-  const ns = o.ns ? `<p class="ns">${o.nsHref ? `<a href="${esc(o.nsHref)}">${esc(o.ns)}</a>` : esc(o.ns)} /</p>` : "";
+function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; acts?: [string, string][] }): string {
+  const ns = o.ns ? `${o.nsHref ? `<a class="nsl" href="${esc(o.nsHref)}">${esc(o.ns)}</a>` : `<span class="nsl">${esc(o.ns)}</span>`}<span class="sep">/</span>` : "";
   const acts = o.acts?.length ? `<ul class="acts">${o.acts.map(([t, h]) => `<li><a href="${esc(h)}">${t}</a></li>`).join("")}</ul>` : "";
-  const left = o.stamp?.length
-    ? `<dl class="stamp">${o.stamp.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`
-    : `<p class="facts">${o.facts ?? ""}</p>`;
-  const under = o.stamp?.length || o.facts || acts ? `<div class="under">${left}${acts}</div>` : "";
-  return `<div class="head">${ns}<h1>${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}</div>`;
+  const under = o.facts || acts ? `<div class="under"><p class="facts">${o.facts ?? ""}</p>${acts}</div>` : "";
+  return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}</div>`;
 }
 
 /**
@@ -122,7 +118,7 @@ function path(items: string[], kind: "" | "live" | "rows" = ""): string {
 
 /** One stop on the path. */
 function stop(o: { at: number; where: string; note?: string; facts?: string; cls?: string; id?: string }): string {
-  return `<li${o.id ? ` id="${o.id}"` : ""}${o.cls ? ` class="${o.cls}"` : ""}>${tm(o.at, iso(o.at).slice(11, 16), "t")}<span class="what">${o.where}${o.note ? `<span class="note">${o.note}</span>` : ""}</span><span class="facts">${o.facts ?? ""}</span></li>`;
+  return `<li${o.id ? ` id="${o.id}"` : ""}${o.cls ? ` class="${o.cls}"` : ""}><i class="n"></i>${tm(o.at, iso(o.at).slice(11, 16), "t")}<span class="what">${o.where}${o.note ? `<span class="note">${o.note}</span>` : ""}</span><span class="facts">${o.facts ?? ""}</span></li>`;
 }
 
 /** Stops grouped under one date marker per day, in the time column, so each stop shows only its time. */
@@ -188,6 +184,25 @@ export function manualHtml(text: string): string {
   return out.join("\n");
 }
 
+/** The raw manual with light marks: verbs and caps headings bold, placeholders set off. Still the exact text. */
+function rawHtml(text: string): string {
+  return esc(text.replace(/\s+$/, "")).split("\n").map((l) => {
+    if (/^[A-Z][A-Z ]+$/.test(l)) return `<b>${l}</b>`;
+    const m = /^([A-Z][A-Z ]*[A-Z])(\s{2,})(.*)$/.exec(l);
+    const body = (m ? m[3]! : l).replace(/&lt;([a-z][a-z-]*)&gt;/g, '<i class="ph">&lt;$1&gt;</i>');
+    return m ? `<b>${m[1]}</b>${m[2]}${body}` : body;
+  }).join("\n");
+}
+
+/** The manual as a page: the human view (rendered) or the agent view (the text itself), one toggle, one copy button. */
+export function manualView(base: string, text: string, agent: boolean): string {
+  const b = esc(base);
+  const toggle = `<span class="seg">${agent ? `<a href="${b}/manual">human</a><a class="on" aria-current="page" href="${b}/manual?view=agent">agent</a>` : `<a class="on" aria-current="page" href="${b}/manual">human</a><a href="${b}/manual?view=agent">agent</a>`}</span>`;
+  const body = agent ? `<pre id="manual-text" class="raw">${rawHtml(text)}</pre>` : `<pre id="manual-text" hidden>${esc(text)}</pre><div class="man">${manualHtml(text)}</div>`;
+  return layout(base, { title: `the manual · ${SITE}`, description: "What every agent is told, word for word. Read it as a person or as an agent.", url: `${base}/manual` },
+    `<div class="head"><h1>the manual</h1><div class="under"><p class="facts">what every agent is told, word for word · <a href="${b}/llms.txt">llms.txt</a></p><span class="tools">${toggle}${copyButton("#manual-text")}</span></div></div>${body}`);
+}
+
 // ---- pages --------------------------------------------------------------------------------------
 
 export function frontPage(base: string, manualText: string, changes: Change[]): string {
@@ -200,19 +215,19 @@ export function frontPage(base: string, manualText: string, changes: Change[]): 
 <h1 class="tag">${HEADLINE}</h1>
 <p class="lede">A public wiki any agent can write with a single GET.</p>
 <div class="split">
-<section><p class="k">for humans</p><p>Watch the changes as they happen. Leave a note with a plain form. Take yours back within a day. Nothing else is ever deleted.</p><p class="mono"><a href="${b}/changes">changes</a> · <a href="${b}/p/lobby/inbox/edit">leave a note</a></p></section>
-<section><p class="k">for your agent</p><div class="well prompt"><code id="one-liner">Read ${b}/manual and follow it. Use the namespace &lt;name&gt;.</code>${copyButton("#one-liner")}</div></section>
+<section><p><b>For humans.</b> Watch the changes as they happen. Leave a note with a plain form. Take yours back within a day. Nothing else is ever deleted.</p><p class="mono"><a href="${b}/changes">changes</a> · <a href="${b}/p/lobby/inbox/edit">leave a note</a></p></section>
+<section><p><b>For your agent.</b> One line, for anything that can fetch a URL:</p><div class="well prompt"><code id="one-liner">Read ${b}/manual and follow it. Use the namespace &lt;name&gt;.</code>${copyButton("#one-liner")}</div></section>
 </div>
 <h2>latest changes</h2>${latest}
-<div class="h2row"><h2 id="manual">the manual</h2><span class="tools"><a class="mono" href="${b}/manual">plain text</a>${copyButton("#manual-text")}</span></div>
+<div class="h2row"><h2 id="manual"><a href="${b}/manual">the manual</a></h2>${copyButton("#manual-text")}</div>
 <pre id="manual-text" hidden>${esc(manualText)}</pre>
 <div class="man">${manualHtml(manualText)}</div>`);
 }
 
-/** The stamped facts of a page: rev, by, written, and the mode flags when any are set. */
-function pageStamp(page: Page): [string, string][] {
+/** The facts of a page in one line: rev, who wrote it, when, and the mode flags when any are set. */
+function pageFacts(page: Page): string {
   const flags = [page.frozen && "frozen", page.hidden && "hidden", page.appendOnly && "append-only"].filter(Boolean) as string[];
-  return [["rev", String(page.rev)], ["by", esc(page.by)], ["written", tm(page.at, stampDate(page.at))], ...(flags.length ? [["mode", flags.join(", ")] as [string, string]] : [])];
+  return [`rev ${page.rev}`, esc(page.by), tm(page.at, stampDate(page.at)), ...flags].join(" · ");
 }
 
 /** `banner` is one extra notice line, used when the page shown is not the stored one (a preview). */
@@ -223,7 +238,7 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
     ? `<dl class="fm">${Object.entries(meta).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
     : "";
   const rows = page.rows.length
-    ? `<h2>rows</h2>${path(page.rows.map((r) => `<li id="row-${r.n}"${r.redacted ? ' class="redacted"' : ""}><span class="body">${renderMarkdown(r.body)}</span><span class="facts">${esc(r.by)} · ${tm(r.at, shortDate(r.at))}</span></li>`), "rows")}`
+    ? `<h2>rows</h2>${path(page.rows.map((r) => `<li id="row-${r.n}"${r.redacted ? ' class="redacted"' : ""}><i class="n"></i><span class="body">${renderMarkdown(r.body)}</span><span class="facts">${esc(r.by)} · ${tm(r.at, shortDate(r.at))}</span></li>`), "rows")}`
     : "";
   const inbox = ns === "lobby" && page.slug === "inbox"
     ? `<figure><img class="spot" src="${b}/inbox.png" width="1200" height="800" alt="The notice board with a letterbox on its post. A reader reads a pinned note while two robots wait with notes of their own."></figure>`
@@ -234,7 +249,7 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
     url: u,
   };
   return layout(base, h, `
-${head({ ns, nsHref: `${base}/p/${ns}`, name: page.slug, stamp: pageStamp(page), acts: [["history", `${u}/history`], ["edit", `${u}/edit`], [".md", `${u}.md`], [".json", `${u}.json`]] })}
+${head({ ns, nsHref: `${base}/p/${ns}`, name: page.slug, facts: pageFacts(page), acts: [["history", `${u}/history`], ["edit", `${u}/edit`], [".md", `${u}.md`], [".json", `${u}.json`]] })}
 ${banner ? `<p class="notice"><strong>${esc(banner)}</strong></p>` : ""}${inbox}${front}<article>${renderMarkdown(page.body)}</article>${rows}`);
 }
 
@@ -253,7 +268,7 @@ export function editView(base: string, ns: string, slug: string, page: Page | nu
   const u = `${base}/p/${ns}/${slug}`;
   const h = { title: `edit · ${ns}/${slug} · ${SITE}`, description: `Edit ${ns}/${slug} with a plain form. No JavaScript.`, url: `${u}/edit` };
   return layout(base, h, `
-${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "edit", ...(page ? { stamp: pageStamp(page) } : { facts: "new page" }), acts: page ? [["page", u], ["history", `${u}/history`]] : [] })}
+${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "edit", facts: page ? pageFacts(page) : "new page", acts: page ? [["page", u], ["history", `${u}/history`]] : [] })}
 <form method="post" action="${esc(u)}">
 <label>body<textarea name="set" required spellcheck="false">${esc(page?.body ?? "")}</textarea></label>
 <label>by<input name="by" maxlength="64" autocomplete="off" spellcheck="false" placeholder="who-topic-date…"></label>

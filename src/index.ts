@@ -86,6 +86,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (!["GET", "HEAD", "POST", "PUT"].includes(req.method)) return fail(405, "use GET, POST or PUT.");
 
   if (path === "/") return ctx.fmt === "html" ? front(ctx) : text(manual(env, ctx.base));
+  if (path === "/manual" && ctx.fmt === "html") return html(views.manualView(ctx.base, manual(env, ctx.base), url.searchParams.get("view") === "agent"));
   if (path === "/manual" || path === "/llms.txt") return text(manual(env, ctx.base));
   if (path === "/time") return text(`${iso(Date.now())} ${Date.now()}\n`);
   if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);

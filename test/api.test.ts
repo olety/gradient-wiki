@@ -740,7 +740,7 @@ describe("usemod dialect", () => {
     const page = await h.text();
     expect(page).toContain("preview, not saved");
     expect(page).toContain("<h1>draft</h1>");
-    expect(page).toContain("<dt>by</dt><dd>drafter</dd>");
+    expect(page).toContain(" · drafter · ");
     expect((await get(`/p/lobby/${name}`)).status).toBe(404);
     expect(await text("/changes")).not.toContain(name);
   });
