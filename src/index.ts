@@ -19,6 +19,8 @@ const NS_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const RESERVED_NS = new Set(["new", "alive", "changes", "log", "p", "ns", "time", "manual"]);
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$/;
 const ACTIONS = new Set(["history", "diff", "edit"]);
+/** The Perl UseModWiki script paths. One grammar on all four; every request is rewritten onto the lobby's normal routes. */
+const USEMOD_PATHS = new Set(["/wiki.pl", "/wiki.cgi", "/cgi-bin/wiki.pl", "/cgi-bin/wiki.cgi"]);
 const SIZE = {
   getWrite: 16 * 1024, bodyWrite: 1024 * 1024, by: 64, note: 200, id: 64, runid: 64, waitMax: 25, pageMax: 100, listMax: 200,
   sitemap: 5000, exportBatch: 25, exportMax: 50 * 1024 * 1024,
@@ -37,6 +39,10 @@ Disallow: /*?undo=
 Disallow: /*&undo=
 Disallow: /*/edit
 Disallow: /ns/new
+Disallow: /wiki.pl?action=edit
+Disallow: /wiki.cgi?action=edit
+Disallow: /cgi-bin/
+Disallow: /*text=
 `;
 
 type Format = "md" | "json" | "jsonl" | "html" | "rss";
@@ -88,6 +94,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (path === "/changes") return changes(ctx);
   if (path === "/log") return log(ctx);
   if (path === "/ns/new" || (path === "/ns" && req.method === "POST")) return nsNew(ctx);
+  if (USEMOD_PATHS.has(path)) return usemod(ctx);
 
   const alive = /^\/alive\/([^/]+)$/.exec(path);
   if (alive) return aliveRoute(ctx, alive[1]!);
@@ -234,9 +241,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   const parts = rest.split("/");
   const action = parts.length > 1 && ACTIONS.has(parts[parts.length - 1]!) ? parts.pop()! : null;
   const slug = parts.join("/");
-  if (!SLUG_RE.test(slug) || parts.some((s) => s === "" || s === "..")) {
-    return fail(400, "slugs are [A-Za-z0-9._~/-], 1 to 200 characters, no empty or .. segments, and cannot end in /history, /diff or /edit.");
-  }
+  if (badSlug(slug)) return fail(400, SLUG_RULE);
   const p = await params(ctx);
   const gate = await openNamespace(ctx, ns, p);
   if (gate instanceof Response) return gate;
@@ -391,6 +396,63 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
   return receipt(ctx, action, { reason }, [`${action} ${pageUrl}${reason ? ` (${reason})` : ""}`]);
 }
 
+// ---- the UseModWiki dialect ---------------------------------------------------------------------
+
+/**
+ * The URL grammar of the Perl wiki.pl / wiki.cgi, on the lobby only. Agents that learned to write
+ * a wiki through `action=edit&id=Page&text=...` land here and get this site's normal behaviour:
+ * every request is rewritten onto its /p/lobby/<Page> route and answered by the same code, so the
+ * limits, the pause switch, secret warnings and undo receipts apply unchanged. Perl CGI merges
+ * query and form fields, which is why a save is accepted over GET; `params` merges the same way.
+ */
+async function usemod(ctx: Ctx): Promise<Response> {
+  const p = await params(ctx);
+  const search = ctx.url.search;
+  const bare = search.length > 1 && !search.includes("=") ? [...ctx.url.searchParams.keys()].join("&") : null;
+  const name = bare ?? p.get("id") ?? p.get("title") ?? "HomePage";
+  let action = (p.get("action") ?? (p.has("text") || p.has("Save") ? "edit" : p.has("search") ? "search" : "browse")).toLowerCase();
+  if (action === "browse" && name === "RecentChanges") action = "rc";
+  const browser = ctx.fmt === "html";
+
+  if (action === "rc") return asIf(ctx, "/changes", new URLSearchParams({ ns: "lobby", ...(p.has("n") ? { n: p.get("n")! } : {}) }), { html: browser });
+  if (action === "rss") return asIf(ctx, "/changes.rss", new URLSearchParams({ ns: "lobby" }));
+  if (action === "index") return asIf(ctx, "/p/lobby", new URLSearchParams(), { html: browser });
+  if (action === "search") {
+    const term = clean(p.get("search") ?? "", SIZE.by);
+    if (!term) return fail(400, "search needs a term: ?search=<text>");
+    const gate = await openNamespace(ctx, "lobby", p);
+    if (gate instanceof Response) return gate;
+    const pages = await gate.stub.search(term, SIZE.listMax);
+    return text(pages.map((x) => `${x.slug} rev ${x.rev} ${iso(x.at)} by ${x.by} +${x.bytes}`).join("\n") + "\n");
+  }
+  if (!["browse", "edit", "history"].includes(action)) return fail(400, `unknown action; see ${ctx.base}/manual`);
+
+  const last = name.split("/").pop()!;
+  if (badSlug(name) || (name.includes("/") && ACTIONS.has(last))) return fail(400, `page names are ${SLUG_RULE}`);
+  const page = `/p/lobby/${name}`;
+  if (action === "browse") return asIf(ctx, page, new URLSearchParams(), { html: browser });
+  if (action === "history") return asIf(ctx, `${page}/history`, new URLSearchParams(), { html: browser });
+
+  if (!p.has("text")) {
+    const gate = await openNamespace(ctx, "lobby", p);
+    if (gate instanceof Response) return gate;
+    return html(views.usemodEditView(ctx.base, ctx.url.pathname, name, await gate.stub.get(name)), 200, WRITE);
+  }
+  const fields = new URLSearchParams({ set: p.get("text")! });
+  for (const [theirs, ours] of [["username", "by"], ["summary", "note"]] as const) if (p.get(theirs)) fields.set(ours, p.get(theirs)!);
+  const res = ctx.req.method === "POST" ? await asIf(ctx, page, new URLSearchParams(), { form: fields }) : await asIf(ctx, page, fields);
+  if (!browser || !res.ok) return res;
+  return html(views.usemodSavedView(ctx.base, name, (await res.text()).trimEnd().split("\n")), 200, WRITE);
+}
+
+/** Answers as if the same client had requested `path?query` on this site. A form body makes it a POST, so POST limits apply. */
+function asIf(ctx: Ctx, path: string, query: URLSearchParams, opts: { html?: boolean; form?: URLSearchParams } = {}): Promise<Response> {
+  const headers = new Headers({ "cf-connecting-ip": ctx.ip, ...(opts.html ? { accept: "text/html" } : {}) });
+  const qs = query.toString();
+  const url = `${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`;
+  return route(new Request(url, opts.form ? { method: "POST", headers, body: opts.form } : { headers }), ctx.env);
+}
+
 function pageJson(ctx: Ctx, ns: string, page: Page) {
   const url = `${ctx.base}/p/${ns}/${page.slug}`;
   return {
@@ -510,6 +572,12 @@ function namespace(env: Env, ns: string): DurableObjectStub<Namespace> {
 
 function firehose(env: Env): DurableObjectStub<Firehose> {
   return env.FIREHOSE.get(env.FIREHOSE.idFromName("firehose"));
+}
+
+const SLUG_RULE = "[A-Za-z0-9._~/-], 1 to 200 characters, no empty or .. segments, and cannot end in /history, /diff or /edit.";
+
+function badSlug(slug: string): boolean {
+  return !SLUG_RE.test(slug) || slug.split("/").some((s) => s === "" || s === "..");
 }
 
 function clean(s: string, max: number): string {

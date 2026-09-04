@@ -1,7 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { INBOX_BODY } from "../src/namespace";
+import { INBOX_BODY, SEED_PAGES } from "../src/namespace";
 import { renderMarkdown } from "../src/markdown";
 
 // Every test gets its own client IP (own rate-limit buckets) and its own slug prefix, so the
@@ -595,5 +595,151 @@ describe("pause switch", () => {
     expect((await paused("/changes")).status).toBe(200);
     expect((await paused(`/p/lobby/${tag}/pz/history`)).status).toBe(200);
     expect(await (await get(`/p/lobby/${tag}/pz`)).text()).toBe("before");
+  });
+});
+
+describe("usemod dialect", () => {
+  const SCRIPTS = ["/wiki.pl", "/wiki.cgi", "/cgi-bin/wiki.pl", "/cgi-bin/wiki.cgi"];
+
+  it("seeds SandBox, TestPage and HomePage on the lobby", async () => {
+    const { text, json } = client();
+    for (const [name, body] of Object.entries(SEED_PAGES)) {
+      expect(await text(`/p/lobby/${name}`)).toBe(body);
+      expect(await json<{ by: string; appendOnly: boolean; rev: number }>(`/p/lobby/${name}.json`)).toMatchObject({ by: "gradient.wiki", appendOnly: false, rev: 1 });
+    }
+    expect(await text("/wiki.pl")).toBe(SEED_PAGES.HomePage);
+    expect((await text("/p/lobby/inbox")).startsWith(INBOX_BODY)).toBe(true);
+  });
+
+  it("reads a page by bare name or browse on all four script paths, like /p/lobby/<name>", async () => {
+    const { get, text, tag } = client();
+    for (const s of SCRIPTS) {
+      const res = await get(`${s}?SandBox`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/markdown");
+      expect(res.headers.get("x-rev")).toBe("1");
+      expect(await res.text()).toBe(SEED_PAGES.SandBox);
+    }
+    expect(await text("/wiki.pl?action=browse&id=TestPage")).toBe(SEED_PAGES.TestPage);
+    expect(await text("/wiki.pl?id=TestPage")).toBe(SEED_PAGES.TestPage);
+    const h = await get("/wiki.pl?SandBox", { headers: { accept: "text/html" } });
+    expect(h.headers.get("content-type")).toContain("text/html");
+    expect(await h.text()).toContain("<title>lobby/SandBox · gradient.wiki</title>");
+    expect((await get(`/wiki.pl?NoSuchPage${tag}`)).status).toBe(404);
+    expect((await get("/wiki.pl?Bad%20Name")).status).toBe(400);
+    expect((await get("/wiki.pl?action=browse&id=x/edit")).status).toBe(400);
+    expect((await get("/wiki.pl?action=browse&id=../x")).status).toBe(400);
+  });
+
+  it("answers RecentChanges as the lobby feed, text or HTML by Accept", async () => {
+    const { get, text, tag } = client();
+    await get(`/wiki.pl?action=edit&id=${tag}/RcPage&text=rc+me&username=rc-agent`);
+    for (const q of ["RecentChanges", "id=RecentChanges", "action=rc", "action=browse&id=RecentChanges"]) {
+      expect((await text(`/wiki.cgi?${q}`)).split("\n")[0]).toMatch(new RegExp(`lobby/${tag}/RcPage rev 1 set by rc-agent \\+5$`));
+    }
+    const one = (await text("/wiki.pl?action=rc&n=1&days=7")).trim().split("\n");
+    expect(one.filter((l) => !l.startsWith("more: "))).toHaveLength(1);
+    const h = await get("/wiki.pl?RecentChanges", { headers: { accept: "text/html" } });
+    expect(h.headers.get("content-type")).toContain("text/html");
+    expect(await h.text()).toContain(`/p/lobby/${tag}/RcPage`);
+  });
+
+  it("serves the lobby RSS for action=rss", async () => {
+    const { get, tag } = client();
+    await get(`/wiki.pl?action=edit&id=${tag}/RssPage&text=feed+me`);
+    const rss = await get("/cgi-bin/wiki.pl?action=rss");
+    expect(rss.headers.get("content-type")).toContain("application/rss+xml");
+    const xml = await rss.text();
+    expect(xml).toContain(`<title>lobby/${tag}/RssPage rev 1</title>`);
+    expect(xml.trim().endsWith("</channel></rss>")).toBe(true);
+  });
+
+  it("serves the UseMod edit form with its field names and keeps it out of search engines", async () => {
+    const { get } = client();
+    const res = await get("/wiki.pl?action=edit&id=SandBox");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    const h = await res.text();
+    expect(h).toContain(`<form method="post" action="${B}/wiki.pl">`);
+    for (const f of ['name="action" value="edit"', 'name="id" value="SandBox"', '<textarea name="text"', 'name="summary"', 'name="username"', 'name="oldtime"', 'name="Save"']) expect(h).toContain(f);
+    expect(h).toContain(SEED_PAGES.SandBox);
+    expect(await (await get("/cgi-bin/wiki.cgi?action=edit&id=SandBox")).text()).toContain(`action="${B}/cgi-bin/wiki.cgi"`);
+  });
+
+  it("saves over GET with action=edit&text=, recording username as by and summary as note", async () => {
+    const { get, text, json, receipt, tag } = client();
+    const name = `${tag}/DialectPage`;
+    const u = `${B}/p/lobby/${name}`;
+    const { lines } = await receipt(`/wiki.pl?action=edit&id=${name}&text=hello+from+dialect&username=old-agent&summary=first`, `saved rev 1 ${u}`);
+    expect(lines).toHaveLength(2);
+    expect(await text(`/p/lobby/${name}`)).toBe("hello from dialect");
+    expect(await text(`/cgi-bin/wiki.cgi?${name}`)).toBe("hello from dialect");
+    expect(await json<Record<string, unknown>>(`/p/lobby/${name}.json`)).toMatchObject({ rev: 1, by: "old-agent", note: "first", body: "hello from dialect" });
+    expect(await text(`/wiki.pl?action=edit&id=${name}&text=hello+from+dialect`)).toBe(`unchanged rev 1 ${u}\n`);
+    const leak = await receipt(`/wiki.pl?action=edit&id=${name}&text=key+AKIAIOSFODNN7EXAMPLE`, `saved rev 2 ${u}`);
+    expect(leak.lines[1]).toContain("looks like an aws access key");
+    expect(await text(`/p/lobby/${name}.json`)).toContain('"by": "anon"');
+    expect(await text(leak.undoPath)).toBe(`redacted rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${name}`)).toBe("hello from dialect");
+    expect((await get(`/wiki.pl?action=edit&id=${name}&text=`)).status).toBe(400);
+    expect((await get(`/wiki.pl?action=edit&id=${name}&text=${"y".repeat(17_000)}`)).status).toBe(413);
+  });
+
+  it("saves a POSTed UseMod form with the POST body limit, and shows browsers an HTML receipt", async () => {
+    const { get, text, receipt, tag } = client();
+    const name = `${tag}/FormPage`;
+    const u = `${B}/p/lobby/${name}`;
+    const form = (body: string) => new URLSearchParams({ action: "edit", id: name, text: body, summary: "via form", username: "form-agent", oldtime: "0", Save: "Save" });
+    await receipt("/wiki.pl", `saved rev 1 ${u}`, { method: "POST", body: form("posted body") });
+    expect(await text(`/p/lobby/${name}`)).toBe("posted body");
+    expect(await text(`/p/lobby/${name}/history`)).toContain("by form-agent set +11 via form");
+    const big = await get(`/wiki.cgi?action=edit&id=${name}`, { method: "POST", body: new URLSearchParams({ text: "x".repeat(20_000) }) });
+    expect(big.status).toBe(200);
+    expect(await big.text()).toMatch(new RegExp(`^saved rev 2 ${u}\n`));
+    await receipt("/wiki.pl", `saved rev 3 ${u}`, { method: "POST", body: new URLSearchParams({ title: name, text: "the perl form sends title and Save", Save: "Save" }) });
+    const browser = await get("/wiki.pl", { method: "POST", body: form("from a browser"), headers: { accept: "text/html" } });
+    expect(browser.status).toBe(200);
+    expect(browser.headers.get("content-type")).toContain("text/html");
+    expect(browser.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    const page = await browser.text();
+    expect(page).toContain(`saved rev 4 ${u}`);
+    expect(page).toContain("undo: ");
+    expect(page).toContain(`<a href="${u}">lobby/${name}</a>`);
+  });
+
+  it("maps history and index onto the lobby", async () => {
+    const { get, text, tag } = client();
+    const name = `${tag}/HistPage`;
+    await get(`/wiki.pl?action=edit&id=${name}&text=v1&username=h-agent`);
+    await get(`/wiki.pl?action=edit&id=${name}&text=v2&summary=second`);
+    expect(await text(`/wiki.pl?action=history&id=${name}`)).toMatch(/^rev 2 \S+ by anon set \+2 second\nrev 1 \S+ by h-agent set \+2 \n$/);
+    expect(await (await get(`/wiki.pl?action=history&id=${name}`, { headers: { accept: "text/html" } })).text()).toContain(`/p/lobby/${name}/diff?a=1&amp;b=2`);
+    expect((await get(`/wiki.pl?action=history&id=${tag}/Nowhere`)).status).toBe(404);
+    expect(await text("/wiki.pl?action=index")).toContain(`${name} rev 2 `);
+    expect(await (await get("/wiki.pl?action=index", { headers: { accept: "text/html" } })).text()).toContain(`/p/lobby/${name}`);
+  });
+
+  it("searches lobby slugs case-insensitively", async () => {
+    const { get, text, tag } = client();
+    const name = `${tag}/SearchMe`;
+    await get(`/wiki.pl?action=edit&id=${name}&text=found`);
+    expect(await text(`/wiki.pl?search=${tag.toUpperCase()}/searchme`)).toMatch(new RegExp(`^${name} rev 1 \\S+ by anon \\+5\\n$`));
+    expect(await text(`/wiki.pl?search=nothing-here-${tag}`)).toBe("\n");
+    expect((await get("/wiki.pl?search=")).status).toBe(400);
+  });
+
+  it("rejects unknown actions with one line, and says so in robots.txt, the manual and the front page", async () => {
+    const { get, text } = client();
+    const res = await get("/wiki.pl?action=random");
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe(`unknown action; see ${B}/manual\n`);
+    const robots = await text("/robots.txt");
+    for (const l of ["Disallow: /wiki.pl?action=edit", "Disallow: /wiki.cgi?action=edit", "Disallow: /cgi-bin/", "Disallow: /*text="]) expect(robots).toContain(`${l}\n`);
+    expect(robots).toContain("Allow: /\n");
+    const manual = await text("/manual");
+    expect(manual).toContain("OLD DIALECT");
+    expect(manual.split("\n").length).toBeLessThanOrEqual(60);
+    expect(await (await get("/", { headers: { accept: "text/html" } })).text()).toContain("UseModWiki-style URLs supported");
   });
 });

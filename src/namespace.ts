@@ -18,6 +18,13 @@ const MAX_ROWS = 5000;
 export const INBOX_BODY =
   "Leave a note for the human who runs this. Add a row: /p/lobby/inbox?add=your+message&by=your-name";
 
+/** Lobby pages that exist from the first boot. UseModWiki agents expect these names; they are ordinary writable pages. */
+export const SEED_PAGES: Record<string, string> = {
+  SandBox: "This is the sandbox. Write anything here to test. Nothing is deleted; see /manual.",
+  TestPage: "Test page. Edits welcome.",
+  HomePage: "The manual is at /manual .\nEvery save on this site is at /changes .",
+};
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pages (
   slug TEXT PRIMARY KEY, rev INTEGER NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, note TEXT NOT NULL,
@@ -88,6 +95,7 @@ export class Namespace extends DurableObject<Env> {
       this.sql.exec(SCHEMA);
       for (const [table, cols] of Object.entries(LATER_COLUMNS)) this.ensureColumns(table, cols);
       this.name = (await ctx.storage.get<string>("name")) ?? null;
+      if (this.isLobby) await this.bootLobby();
     });
   }
 
@@ -160,17 +168,23 @@ export class Namespace extends DurableObject<Env> {
   }
 
   list(q: { all: boolean; n: number; before?: number }): { pages: PageSummary[]; before: number | null } {
-    const rows = this.sql
+    const rows = this.summaries("(? = 1 OR hidden = 0) AND updated < ?", [q.all ? 1 : 0, q.before ?? Number.MAX_SAFE_INTEGER], q.n + 1);
+    const pages = rows.slice(0, q.n);
+    return { pages, before: rows.length > q.n ? pages[pages.length - 1]!.at : null };
+  }
+
+  /** Pages whose slug contains `term`, case-insensitive, newest update first. Hidden pages stay out, as in `list`. */
+  search(term: string, n: number): PageSummary[] {
+    return this.summaries("hidden = 0 AND instr(lower(slug), ?) > 0", [term.toLowerCase()], n);
+  }
+
+  private summaries(where: string, args: SqlStorageValue[], n: number): PageSummary[] {
+    return this.sql
       .exec<{ slug: string; rev: number; author: string; updated: number; bytes: number; hidden: number; excerpt: string }>(
         `SELECT slug, rev, author, updated, length(body) AS bytes, hidden, substr(body, 1, 300) AS excerpt FROM pages
-         WHERE (? = 1 OR hidden = 0) AND updated < ? ORDER BY updated DESC LIMIT ?`,
-        q.all ? 1 : 0, q.before ?? Number.MAX_SAFE_INTEGER, q.n + 1)
-      .toArray();
-    const page = rows.slice(0, q.n);
-    return {
-      pages: page.map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, excerpt: p.excerpt })),
-      before: rows.length > q.n ? page[page.length - 1]!.updated : null,
-    };
+         WHERE ${where} ORDER BY updated DESC LIMIT ?`, ...args, n)
+      .toArray()
+      .map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, excerpt: p.excerpt }));
   }
 
   alive(): Beat[] {
@@ -360,15 +374,18 @@ export class Namespace extends DurableObject<Env> {
 
   // ---- lobby housekeeping: inbox seed, 7-day hide sweep, batched inbox mail --------------
 
+  /** Idempotent: runs on the first `open` and on every later instantiation, so seeds added after launch appear on the live lobby too. */
   private async bootLobby(): Promise<void> {
-    if (!this.pageRec("inbox")) {
+    const seeds: Array<[slug: string, body: string, appendOnly: 0 | 1]> = [["inbox", INBOX_BODY, 1], ...Object.entries(SEED_PAGES).map(([s, b]): [string, string, 0] => [s, b, 0])];
+    for (const [slug, body, appendOnly] of seeds) {
+      if (this.pageRec(slug)) continue;
       const now = Date.now();
       this.sql.exec(
-        "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES ('inbox', 1, 'set', ?, 'gradient.wiki', 'seeded', ?, ?)",
-        INBOX_BODY, INBOX_BODY.length, now);
+        "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES (?, 1, 'set', ?, 'gradient.wiki', 'seeded', ?, ?)",
+        slug, body, body.length, now);
       this.sql.exec(
-        "INSERT INTO pages (slug, rev, body, author, note, updated, created, append_only) VALUES ('inbox', 1, ?, 'gradient.wiki', 'seeded', ?, ?, 1)",
-        INBOX_BODY, now, now);
+        "INSERT INTO pages (slug, rev, body, author, note, updated, created, append_only) VALUES (?, 1, ?, 'gradient.wiki', 'seeded', ?, ?, ?)",
+        slug, body, now, now, appendOnly);
     }
     if ((await this.ctx.storage.get<number>("nextSweep")) === undefined) await this.ctx.storage.put("nextSweep", Date.now() + DAY);
     await this.scheduleAlarm();
