@@ -84,8 +84,8 @@ async function route(req: Request, env: Env): Promise<Response> {
 
   // One address for everything: plain http and the www host are sent to https on the apex, permanently.
   const canonical = new URL(ctx.base);
-  const plain = url.protocol === "http:" || /"scheme":"http"/.test(req.headers.get("cf-visitor") ?? "");
-  if (plain || (url.hostname !== canonical.hostname && url.hostname === `www.${canonical.hostname}`)) {
+  const plain = canonical.protocol === "https:" && (url.protocol === "http:" || /"scheme":"http"/.test(req.headers.get("cf-visitor") ?? ""));
+  if (plain || url.hostname === `www.${canonical.hostname}`) {
     return new Response(null, { status: 301, headers: headers({ location: `${ctx.base}${url.pathname}${url.search}` }) });
   }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: headers() });

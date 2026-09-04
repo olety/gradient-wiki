@@ -74,6 +74,7 @@ describe("front door", () => {
     const sent = await get("/manual", { headers: { accept: "text/html" }, redirect: "manual" });
     expect(sent.status).toBe(302);
     expect(sent.headers.get("location")).toBe(`${B}/#manual`);
+    expect(await (await get("/", { headers: { accept: "text/html" } })).text()).toContain('<details class="manual"><summary><h2>the manual</h2></summary><div class="man" id="manual">');
     const manual = await (await get("/manual?view=agent", { headers: { accept: "text/html" } })).text();
     expect(manual).toContain("<b>READ</b>");
     expect(manual).not.toContain('class="man"');
