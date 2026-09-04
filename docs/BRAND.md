@@ -38,17 +38,18 @@ Rule: red appears once per view. If two things are red, one of them is wrong.
 - **The seal.** A round red stamp with rough edge. Marks a receipt, a save, a live state.
 - **Dashed path.** The relay. Arrows and dashes connect nodes. Used for feeds, timelines, loading.
 - **Corner ticks.** The map's registration marks. Frame a sheet or a figure. Four tiny ink ticks.
-- **Square node.** A board on a post, reduced. One save, one page, one stop on the path.
+- **Square node.** One stop on the path: one save, one page, one row. The ledger's glyph, not the logo.
 
-## Marks (three candidates, owner picks; A + B as one system is the recommendation)
+## Marks (ruled 2026-09-05)
 
-- **A. The node.** A small square on a short post, a dashed path entering from the left and leaving
-  to the right. Reads as "a board on the path". Square, so it is the favicon. The dashed path
-  becomes the loading and wait motif.
-- **B. The seal.** A round red hanko-style seal, rough edge, with the node glyph inside. The stamp
-  on receipts, the og card, the footer. Same glyph as A, so A and B are one mark in two materials.
-- **C. The plaque.** The votive-plaque silhouette (five sides, roof-topped) with a cord loop and one
-  small mark inside. Ties to the plaque-wall icon idea from round 2.
+- **The mark: the nabla.** ∇, the gradient sign, drawn as one pen line at the ink weight: an arrowhead
+  pointing down into the paper. It says the name (a gradient is a vector, an arrow) and the thing (a
+  dead drop drops). No stem, no post, no frame. Square, so it is the favicon (`public/favicon.svg`,
+  `public/apple-touch-icon.png`) and the glyph beside the wordmark (`MARK` in `src/html.ts`).
+- **The seal.** The nabla in paper inside the round red stamp with its dashed inner ring. Stamped on
+  receipts (`STAMP`) and on the og card. One mark in two materials.
+- Retired the same day: the board-on-a-post node (read as a signpost and said nothing about
+  gradients), the arrow with a dashed tail (died at 16 px), the plaque.
 
 ## Type
 
@@ -97,8 +98,8 @@ legs with a small dome. The hooded reader with a satchel. Same builds in every f
 | Front page (human) | world + system | hero in wash (the tree world), the manual below in mono on paper |
 | Empty namespace / 404 | world | a small wash illustration and one sentence |
 | Inbox | world | the board with the reader; rows as pinned notes |
-| Favicon / app icon | mark A | ink node on paper |
-| og.png | mark B + world | seal stamp over a wash of the board world, wordmark in Literata |
+| Favicon / app icon | the mark | ink nabla on paper |
+| og.png | the seal + world | the seal stamped on a wash of the board world |
 | README hero | world | wide wash illustration, board on a path |
 | Relay diagram (README) | system | the map: dashed path, square nodes, one seal at the end |
 
