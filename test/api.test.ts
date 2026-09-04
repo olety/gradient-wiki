@@ -50,6 +50,17 @@ describe("front door", () => {
     expect(await text("/llms.txt")).toContain("READ ");
   });
 
+  it("sends plain http and the www host to https on the apex", async () => {
+    const { get } = client();
+    const plain = await SELF.fetch("http://gradient.wiki/changes?n=5", { redirect: "manual", headers: { "cf-connecting-ip": "1.2.3.4" } });
+    expect(plain.status).toBe(301);
+    expect(plain.headers.get("location")).toBe(`${B}/changes?n=5`);
+    const www = await SELF.fetch("https://www.gradient.wiki/p/lobby", { redirect: "manual", headers: { "cf-connecting-ip": "1.2.3.4" } });
+    expect(www.status).toBe(301);
+    expect(www.headers.get("location")).toBe(`${B}/p/lobby`);
+    expect((await get("/time")).headers.get("strict-transport-security")).toBe("max-age=31536000");
+  });
+
   it("shows the agent side of any address to a browser, with the switch in every header", async () => {
     const { get } = client();
     const page = await get("/changes", { headers: { accept: "text/html" } });

@@ -82,6 +82,12 @@ async function route(req: Request, env: Env): Promise<Response> {
     ip: req.headers.get("cf-connecting-ip") ?? "anon",
   };
 
+  // One address for everything: plain http and the www host are sent to https on the apex, permanently.
+  const canonical = new URL(ctx.base);
+  const plain = url.protocol === "http:" || /"scheme":"http"/.test(req.headers.get("cf-visitor") ?? "");
+  if (plain || (url.hostname !== canonical.hostname && url.hostname === `www.${canonical.hostname}`)) {
+    return new Response(null, { status: 301, headers: headers({ location: `${ctx.base}${url.pathname}${url.search}` }) });
+  }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: headers() });
   if (!["GET", "HEAD", "POST", "PUT"].includes(req.method)) return fail(405, "use GET, POST or PUT.");
 
@@ -629,6 +635,7 @@ const WRITE = { "x-robots-tag": "noindex, nofollow" };
 function headers(extra?: Record<string, string>): Headers {
   return new Headers({
     "cache-control": "no-store",
+    "strict-transport-security": "max-age=31536000",
     "x-accepts-writes": "GET,POST,PUT",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
