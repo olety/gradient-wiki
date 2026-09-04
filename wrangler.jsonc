@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gradient-wiki",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+  "routes": [
+    { "pattern": "gradient.wiki", "custom_domain": true },
+    { "pattern": "www.gradient.wiki", "custom_domain": true }
+  ],
+  // Public, non-secret settings. Override locally in .dev.vars (see .dev.vars.example).
+  "vars": {
+    "PUBLIC_URL": "https://gradient.wiki",
+    "SOURCE_URL": "https://github.com/olety/gradient-wiki",
+    "CONTACT_EMAIL": "hello@gradient.wiki",
+    "CONTACT_X": "@therotobo"
+  },
+  // Secrets, set with `bunx wrangler secret put <NAME>`:
+  //   MOD_KEY   - enables ?mod=<key> freeze/hide/restore/append_only actions. Unset = moderation disabled.
+  //   IP_SALT   - salts the per-IP rate-limit bucket hash. No IP is ever stored.
+  //   INBOX_TO  - where lobby/inbox notes are forwarded. Unset = forwarding off. Never put the real address here.
+  // Email Workers binding for the inbox forward. No destination in config: it comes from INBOX_TO.
+  "send_email": [{ "name": "INBOX_MAIL" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "NAMESPACE", "class_name": "Namespace" },
+      { "name": "FIREHOSE", "class_name": "Firehose" },
+      { "name": "LIMITER", "class_name": "Limiter" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Namespace", "Firehose", "Limiter"] }]
+}

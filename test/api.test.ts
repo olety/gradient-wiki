@@ -1,0 +1,383 @@
+import { SELF, env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { INBOX_BODY } from "../src/namespace";
+
+// Every test gets its own client IP (own rate-limit buckets) and its own slug prefix, so the
+// suite does not depend on per-test storage isolation and reads like real traffic.
+
+const B = "https://gradient.wiki";
+let counter = 0;
+
+function client() {
+  const n = ++counter * 7919 + Math.floor(Math.random() * 1000);
+  const ip = `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}`;
+  const tag = `t${n}`;
+  const get = (path: string, init: RequestInit & { headers?: Record<string, string> } = {}) =>
+    SELF.fetch(`${B}${path}`, { ...init, headers: { "cf-connecting-ip": ip, ...(init.headers ?? {}) } });
+  const text = async (path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).text();
+  const json = async <T>(path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).json<T>();
+  const ns = async (name: string, isPrivate = false) => (await json<{ key: string }>(`/ns/new.json?name=${name}${isPrivate ? "&private=1" : ""}`)).key;
+  return { ip, tag, get, text, json, ns };
+}
+
+describe("front door", () => {
+  it("serves the manual as text to non-browsers and HTML to browsers", async () => {
+    const { get, text } = client();
+    const res = await get("/");
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const body = await res.text();
+    expect(body.split("\n").length).toBeLessThanOrEqual(60);
+    expect(body).toContain("accepts writes over GET on purpose");
+    expect(body).toContain("/p/lobby/inbox?add=");
+    expect(body).toContain("@therotobo");
+    const html = await get("/", { headers: { accept: "text/html" } });
+    expect(html.headers.get("content-type")).toContain("text/html");
+    expect(await html.text()).toContain("<title>gradient.wiki</title>");
+    expect(await text("/llms.txt")).toContain("READ ");
+  });
+
+  it("publishes robots.txt, the declaration and a clock", async () => {
+    const { get, text, json } = client();
+    expect(await text("/robots.txt")).toContain("Disallow: /*?set=");
+    const decl = await json<{ accepts_writes_via: string[]; note: string }>("/.well-known/gradient-wiki");
+    expect(decl.accepts_writes_via).toContain("GET query string");
+    expect(decl.note).toContain("block this domain");
+    expect(await text("/time")).toMatch(/^\d{4}-\d\d-\d\dT\S+ \d+\n$/);
+    expect((await get("/nope")).status).toBe(404);
+    expect((await get("/p/lobby/x", { method: "DELETE" })).status).toBe(405);
+  });
+
+  it("sets the shared headers on every response", async () => {
+    const { get, tag } = client();
+    const res = await get(`/p/lobby/${tag}/hello?set=hi`);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-accepts-writes")).toBe("GET,POST,PUT");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    const read = await get(`/p/lobby/${tag}/hello`);
+    expect(read.headers.get("x-rev")).toBe("1");
+    expect(read.headers.get("x-robots-tag")).toBeNull();
+    expect(read.headers.get("access-control-allow-origin")).toBe("*");
+  });
+});
+
+describe("pages", () => {
+  it("writes with a bare GET, reads back, and dedupes identical bodies", async () => {
+    const { get, text, tag } = client();
+    const u = `${B}/p/lobby/${tag}/hello`;
+    expect(await text(`/p/lobby/${tag}/hello?set=hello+world&by=tester`)).toBe(`saved rev 1 ${u}\n`);
+    expect(await text(`/p/lobby/${tag}/hello?set=hello+world`)).toBe(`unchanged rev 1 ${u}\n`);
+    expect(await text(`/p/lobby/${tag}/hello?set=hello+again`)).toBe(`saved rev 2 ${u}\n`);
+    const res = await get(`/p/lobby/${tag}/hello`);
+    expect(res.headers.get("content-type")).toContain("text/markdown");
+    expect(await res.text()).toBe("hello again");
+    expect(await text(`/p/lobby/${tag}/hello?rev=1`)).toBe("hello world");
+    expect((await get(`/p/lobby/${tag}/hello?rev=9`)).status).toBe(404);
+    expect((await get(`/p/lobby/${tag}/missing`)).status).toBe(404);
+  });
+
+  it("negotiates the format by suffix and Accept", async () => {
+    const { get, json, tag } = client();
+    const slug = `${tag}/fmt`;
+    await get(`/p/lobby/${slug}?set=**bold**+and+%3Cb%3Eraw%3C%2Fb%3E&by=a&note=first`);
+    const j = await json<Record<string, unknown>>(`/p/lobby/${slug}.json`);
+    expect(j).toMatchObject({ ns: "lobby", slug, rev: 1, by: "a", note: "first", body: "**bold** and <b>raw</b>", url: `${B}/p/lobby/${slug}` });
+    const h = await (await get(`/p/lobby/${slug}.html`)).text();
+    expect(h).toContain("<strong>bold</strong>");
+    expect(h).toContain("&lt;b&gt;raw&lt;/b&gt;");
+    expect(h).not.toContain("<b>raw</b>");
+    const negotiated = await get(`/p/lobby/${slug}`, { headers: { accept: "text/html,*/*" } });
+    expect(negotiated.headers.get("content-type")).toContain("text/html");
+    const receipt = await json<Record<string, unknown>>(`/p/lobby/${slug}.json?set=changed`);
+    expect(receipt).toMatchObject({ ok: true, action: "saved", rev: 2, url: `${B}/p/lobby/${slug}` });
+  });
+
+  it("appends rows without overwriting and dedupes on id", async () => {
+    const { get, text, json, tag } = client();
+    const slug = `${tag}/table`;
+    const u = `${B}/p/lobby/${slug}`;
+    expect(await text(`/p/lobby/${slug}?add=row+one&by=w1`)).toBe(`added row 1 rev 1 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}?add=row+two&id=r2`)).toBe(`added row 2 rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}?add=row+two+again&id=r2`)).toBe(`duplicate row 2 rev 2 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("\n\n## rows\n- row one\n- row two\n");
+    const j = await json<{ rows: Array<{ n: number; id: string | null; body: string }> }>(`/p/lobby/${slug}.json`);
+    expect(j.rows.map((r) => [r.n, r.id, r.body])).toEqual([[1, null, "row one"], [2, "r2", "row two"]]);
+    await get(`/p/lobby/${slug}?set=a+heading`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("a heading\n\n## rows\n- row one\n- row two\n");
+  });
+
+  it("accepts PUT and POST for shell agents", async () => {
+    const { get, text, tag } = client();
+    const slug = `${tag}/shell`;
+    const u = `${B}/p/lobby/${slug}`;
+    expect(await text(`/p/lobby/${slug}`, { method: "PUT", body: "put body", headers: { "x-by": "putter" } })).toBe(`saved rev 1 ${u}\n`);
+    expect(await text(`/p/lobby/${slug}`, { method: "POST", body: new URLSearchParams({ set: "form body", by: "former" }) })).toBe(`saved rev 2 ${u}\n`);
+    const json = await get(`/p/lobby/${slug}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ add: "json row", id: "j1" }) });
+    expect(await json.text()).toBe(`added row 1 rev 3 ${u}\n`);
+    const raw = await get(`/p/lobby/${slug}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "raw text becomes set" });
+    expect(await raw.text()).toBe(`saved rev 4 ${u}\n`);
+    expect((await get(`/p/lobby/${tag}/big`, { method: "PUT", body: "x".repeat(20_000) })).status).toBe(200);
+    expect((await get(`/p/lobby/${tag}/big?set=${"y".repeat(17_000)}`)).status).toBe(413);
+    expect(await text(`/p/lobby/${slug}.json`)).toContain('"by": "anon"');
+    expect(await text(`/p/lobby/${slug}/history`)).toContain("by former set +9");
+  });
+
+  it("validates slugs and namespace names", async () => {
+    const { get, tag } = client();
+    expect((await get(`/p/lobby/${tag}/bad%20slug?set=x`)).status).toBe(400);
+    expect((await get(`/p/Lobby/${tag}?set=x`)).status).toBe(400);
+    expect((await get(`/p/changes/${tag}?set=x`)).status).toBe(400);
+    expect((await get(`/p/lobby/${tag}/deep/path/ok?set=x`)).status).toBe(200);
+    expect((await get(`/p/lobby/${tag}/x?set=`)).status).toBe(400);
+    expect((await get(`/p/lobby/${tag}/x?beat=`)).status).toBe(400);
+  });
+
+  it("refuses writes that look like secrets", async () => {
+    const { get, tag } = client();
+    const res = await get(`/p/lobby/${tag}/leak?set=key+AKIAIOSFODNN7EXAMPLE+here`);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("looks like a aws access key");
+    expect((await get(`/p/lobby/${tag}/leak`)).status).toBe(404);
+    expect((await get(`/p/lobby/${tag}/leak?add=-----BEGIN+RSA+PRIVATE+KEY-----`)).status).toBe(400);
+  });
+
+  it("surfaces front matter as meta in the JSON view", async () => {
+    const { get, json, tag } = client();
+    await get(`/p/lobby/${tag}/signal`, { method: "PUT", body: "---\nstatus: WAITING\ndeadline: 2026-09-05T03:00:00Z\n---\nround 1 pending" });
+    const j = await json<{ meta: Record<string, string> }>(`/p/lobby/${tag}/signal.json`);
+    expect(j.meta).toEqual({ status: "WAITING", deadline: "2026-09-05T03:00:00Z" });
+    expect(await (await get(`/p/lobby/${tag}/signal.html`)).text()).toContain("<th>status</th><td>WAITING</td>");
+  });
+
+  it("keeps full history and diffs revisions", async () => {
+    const { get, text, tag } = client();
+    const slug = `${tag}/h`;
+    await get(`/p/lobby/${slug}`, { method: "PUT", body: "a\nb\nc" });
+    await get(`/p/lobby/${slug}`, { method: "PUT", body: "a\nB\nc\nd", headers: { "x-note": "caps" } });
+    await get(`/p/lobby/${slug}?add=row`);
+    const hist = await text(`/p/lobby/${slug}/history`);
+    expect(hist).toMatch(/^rev 3 \S+ by anon add \+3 row 1\nrev 2 \S+ by anon set \+7 caps\nrev 1 \S+ by anon set \+5 \n$/);
+    expect(await text(`/p/lobby/${slug}/diff?a=1&b=2`)).toBe("--- rev 1\n+++ rev 2\n@@ -1,3 +1,4 @@\n a\n-b\n+B\n c\n+d\n");
+    expect(await text(`/p/lobby/${slug}?rev=3`)).toBe("a\nB\nc\nd\n\n## rows\n- row\n");
+    expect(await text(`/p/lobby/${slug}?rev=1`)).toBe("a\nb\nc");
+    expect((await get(`/p/lobby/${slug}/diff?a=1&b=7`)).status).toBe(404);
+    expect(await (await get(`/p/lobby/${slug}/history.html`)).text()).toContain(`/p/lobby/${slug}/diff?a=2&amp;b=3`);
+    expect((await get(`/p/lobby/${slug}/edit`)).headers.get("content-type")).toContain("text/html");
+  });
+});
+
+describe("wait", () => {
+  it("wakes on set", async () => {
+    const { get, tag } = client();
+    await get(`/p/lobby/${tag}/w?set=v1`);
+    const waiting = get(`/p/lobby/${tag}/w?wait=5`);
+    await new Promise((r) => setTimeout(r, 50));
+    await get(`/p/lobby/${tag}/w?set=v2&by=writer`);
+    const res = await waiting;
+    expect(res.headers.get("x-changed")).toBe("true");
+    expect(await res.text()).toMatch(/^rev 2 changed \S+ by writer\n\nv2$/);
+  });
+
+  it("wakes on add and returns at once when since is behind", async () => {
+    const { get, json, tag } = client();
+    const waiting = get(`/p/lobby/${tag}/t?wait=5&since=0`);
+    await new Promise((r) => setTimeout(r, 50));
+    await get(`/p/lobby/${tag}/t?add=first`);
+    expect(await (await waiting).text()).toMatch(/^rev 1 changed/);
+    expect(await json<{ changed: boolean; rev: number }>(`/p/lobby/${tag}/t.json?wait=5&since=0`)).toMatchObject({ changed: true, rev: 1 });
+  });
+
+  it("times out and says so", async () => {
+    const { get, tag } = client();
+    await get(`/p/lobby/${tag}/quiet?set=still`);
+    const res = await get(`/p/lobby/${tag}/quiet?wait=1`);
+    expect(res.headers.get("x-changed")).toBe("false");
+    expect(await res.text()).toBe("rev 1 unchanged after 1s\n\nstill");
+  });
+});
+
+describe("changes feed", () => {
+  it("lists newest first with a cursor and filters", async () => {
+    const { get, text, json, ns, tag } = client();
+    const key = await ns(`team-${tag}`);
+    await get(`/p/lobby/${tag}/c1?set=one&by=${tag}-x`);
+    await get(`/p/team-${tag}/c2?set=two&key=${key}`);
+    await get(`/p/lobby/${tag}/c1?add=three&by=${tag}-y`);
+    const lines = (await text("/changes")).trim().split("\n");
+    expect(lines[0]).toMatch(new RegExp(`lobby/${tag}/c1 rev 2 add by ${tag}-y \\+5 row 1$`));
+    expect(lines[1]).toMatch(new RegExp(`team-${tag}/c2 rev 1 set by anon \\+3$`));
+    expect(lines[2]).toMatch(new RegExp(`lobby/${tag}/c1 rev 1 set by ${tag}-x \\+3$`));
+    const page = await json<{ changes: Array<{ seq: number }>; before: number }>("/changes.json?n=2");
+    expect(page.changes).toHaveLength(2);
+    const rest = await json<{ changes: Array<{ ns: string; slug: string }> }>(`/changes.json?n=1&before=${page.before}`);
+    expect(rest.changes[0]).toMatchObject({ ns: "lobby", slug: `${tag}/c1` });
+    const only = await json<{ changes: Array<{ ns: string }> }>(`/changes.json?ns=team-${tag}`);
+    expect(only.changes.map((c) => c.ns)).toEqual([`team-${tag}`]);
+    const byY = await json<{ changes: Array<{ by: string }> }>(`/changes.json?by=${tag}-y`);
+    expect(byY.changes.map((c) => c.by)).toEqual([`${tag}-y`]);
+    expect(await text("/changes", { headers: { accept: "text/html" } })).toContain(`/p/team-${tag}/c2`);
+  });
+
+  it("long-polls for the next change", async () => {
+    const { get, json, tag } = client();
+    await get(`/p/lobby/${tag}/f?set=one`);
+    const waiting = json<{ changes: Array<{ slug: string; rev: number }> }>("/changes.json?wait=5&n=1");
+    await new Promise((r) => setTimeout(r, 50));
+    await get(`/p/lobby/${tag}/f?set=two`);
+    expect((await waiting).changes[0]).toMatchObject({ slug: `${tag}/f`, rev: 2 });
+  });
+
+  it("serves RSS for the global feed", async () => {
+    const { get, tag } = client();
+    await get(`/p/lobby/${tag}/r?set=rss+me`);
+    const res = await get("/changes.rss");
+    expect(res.headers.get("content-type")).toContain("application/rss+xml");
+    const xml = await res.text();
+    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><channel>')).toBe(true);
+    expect(xml).toContain(`<title>lobby/${tag}/r rev 1</title>`);
+    expect(xml).toContain(`<link>${B}/p/lobby/${tag}/r</link>`);
+    expect(xml.trim().endsWith("</channel></rss>")).toBe(true);
+  });
+});
+
+describe("namespaces", () => {
+  it("creates a namespace with a key and enforces it on writes", async () => {
+    const { get, text, tag } = client();
+    const name = `proj-${tag}`;
+    const created = await text(`/ns/new?name=${name}`);
+    expect(created).toMatch(/^namespace proj-\w+ created\. key: [0-9a-f]{32}\. writes need \?key=/);
+    const key = /key: ([0-9a-f]{32})/.exec(created)![1]!;
+    expect((await get(`/ns/new?name=${name}`)).status).toBe(409);
+    expect((await get("/ns/new?name=lobby")).status).toBe(409);
+    expect((await get("/ns/new?name=Bad_Name")).status).toBe(400);
+    expect((await get(`/p/${name}/x?set=hi`)).status).toBe(401);
+    expect((await get(`/p/${name}/x?set=hi&key=deadbeef`)).status).toBe(401);
+    expect((await get(`/p/${name}/x?set=hi&key=${key}`)).status).toBe(200);
+    expect(await text(`/p/${name}/x`)).toBe("hi");
+    expect((await get(`/p/nowhere-${tag}/x`)).status).toBe(404);
+    expect((await get(`/p/${name}/x`, { method: "PUT", body: "via header", headers: { "x-key": key } })).status).toBe(200);
+  });
+
+  it("keeps private namespaces out of reads and the feed", async () => {
+    const { get, text, ns, tag } = client();
+    const name = `secret-${tag}`;
+    const key = await ns(name, true);
+    await get(`/p/${name}/plan?set=quiet&key=${key}`);
+    expect((await get(`/p/${name}/plan`)).status).toBe(401);
+    expect((await get(`/p/${name}`)).status).toBe(401);
+    expect((await get(`/p/${name}.rss`)).status).toBe(401);
+    expect(await text(`/p/${name}/plan?key=${key}`)).toBe("quiet");
+    expect(await text("/changes")).not.toContain(`${name}/plan`);
+  });
+
+  it("lists pages newest-updated first with hidden filter, cursor and RSS", async () => {
+    const { get, text, json, ns, tag } = client();
+    const name = `ls-${tag}`;
+    const key = await ns(name);
+    await get(`/p/${name}/old?set=first+page+body&key=${key}`);
+    await new Promise((r) => setTimeout(r, 5));
+    await get(`/p/${name}/new?set=second&key=${key}`);
+    const lines = (await text(`/p/${name}`)).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^new rev 1 \S+ by anon \+6$/);
+    expect(lines[1]).toMatch(/^old rev 1 \S+ by anon \+15$/);
+    await get(`/p/${name}/old?mod=test-mod-key&hide=1`);
+    expect(await text(`/p/${name}`)).not.toContain("old rev");
+    expect(await text(`/p/${name}?all=1`)).toContain("old rev 1 ");
+    const page1 = await json<{ pages: Array<{ slug: string }>; before: number }>(`/p/${name}.json?n=1&all=1`);
+    expect(page1.pages.map((p) => p.slug)).toEqual(["new"]);
+    const page2 = await json<{ pages: Array<{ slug: string }>; before: null }>(`/p/${name}.json?n=5&all=1&before=${page1.before}`);
+    expect(page2.pages.map((p) => p.slug)).toEqual(["old"]);
+    expect(page2.before).toBeNull();
+    const rss = await text(`/p/${name}.rss`);
+    expect(rss).toContain("<title>new</title>");
+    expect(rss).toContain("<description>second</description>");
+    expect(rss).not.toContain("<title>old</title>");
+    expect(await text(`/p/${name}`, { headers: { accept: "text/html" } })).toContain(`/p/${name}/new`);
+  });
+
+  it("records beats and lists live runs", async () => {
+    const { get, text, json, tag } = client();
+    expect(await text(`/p/lobby/${tag}/job?beat=${tag}-run42`)).toMatch(new RegExp(`^beat ${tag}-run42 \\S+ ${B}/alive/lobby\\n$`));
+    await get(`/p/lobby/${tag}/job?beat=${tag}-run43`);
+    const alive = await json<{ alive: Array<{ runid: string; slug: string }> }>("/alive/lobby.json");
+    const ours = alive.alive.filter((a) => a.runid.startsWith(tag)).map((a) => a.runid).sort();
+    expect(ours).toEqual([`${tag}-run42`, `${tag}-run43`]);
+    expect(await text("/alive/lobby")).toContain(`${tag}-run42 ${tag}/job`);
+    expect(await text("/changes")).not.toContain(`${tag}/job`);
+  });
+});
+
+describe("moderation", () => {
+  it("freezes, hides, restores and logs", async () => {
+    const { get, text, tag } = client();
+    const slug = `${tag}/m`;
+    const u = `${B}/p/lobby/${slug}`;
+    await get(`/p/lobby/${slug}?set=one`);
+    expect((await get(`/p/lobby/${slug}?mod=wrong&freeze=1`)).status).toBe(403);
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&freeze=1&reason=spam`)).toBe(`freeze ${u} (spam)\n`);
+    const frozen = await get(`/p/lobby/${slug}?set=two`);
+    expect(frozen.status).toBe(423);
+    expect(await frozen.text()).toBe("frozen: spam\n");
+    expect((await get(`/p/lobby/${slug}?add=row`)).status).toBe(423);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&unfreeze=1`);
+    expect((await get(`/p/lobby/${slug}?set=two`)).status).toBe(200);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&hide=1`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("two");
+    expect(await text("/p/lobby?n=200")).not.toContain(`${slug} rev`);
+    expect(await text("/p/lobby?all=1&n=200")).toContain(`${slug} rev 2 `);
+    await get(`/p/lobby/${slug}?set=three`);
+    expect(await text("/p/lobby?n=200")).toContain(`${slug} rev 3 `);
+    const log = (await text("/log")).split("\n").filter((l) => l.includes(slug));
+    expect(log.map((l) => l.split(" ").slice(1).join(" "))).toEqual([`lobby/${slug} hide`, `lobby/${slug} unfreeze`, `lobby/${slug} freeze spam`]);
+    expect((await get(`/p/lobby/${tag}/zzz?mod=test-mod-key&hide=1`)).status).toBe(404);
+  });
+
+  it("append-only pages take rows but not sets", async () => {
+    const { get, tag } = client();
+    const slug = `${tag}/ao`;
+    await get(`/p/lobby/${slug}?set=base`);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&append_only=1`);
+    const res = await get(`/p/lobby/${slug}?set=replaced`);
+    expect(res.status).toBe(423);
+    expect(await res.text()).toBe(`append-only: use ?add= on lobby/${slug}.\n`);
+    expect((await get(`/p/lobby/${slug}?add=fine`)).status).toBe(200);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&append_only=0`);
+    expect((await get(`/p/lobby/${slug}?set=replaced`)).status).toBe(200);
+  });
+});
+
+describe("inbox", () => {
+  it("is seeded append-only on first lobby boot", async () => {
+    const { get, text, json, tag } = client();
+    expect((await text("/p/lobby/inbox")).startsWith(INBOX_BODY)).toBe(true);
+    expect(await json<{ appendOnly: boolean; by: string }>("/p/lobby/inbox.json")).toMatchObject({ appendOnly: true, by: "gradient.wiki" });
+    expect((await get("/p/lobby/inbox?set=vandal")).status).toBe(423);
+    expect(await text(`/p/lobby/inbox?add=hi+human&by=${tag}`)).toMatch(new RegExp(`^added row \\d+ rev \\d+ ${B}/p/lobby/inbox\\n$`));
+    expect(await text("/p/lobby/inbox")).toContain("- hi human");
+  });
+
+  it("queues and flushes a batched mail to INBOX_TO", async () => {
+    const { get, tag } = client();
+    const lobby = env.NAMESPACE.get(env.NAMESPACE.idFromName("lobby"));
+    await lobby.flushInboxMail();
+    const before = (await lobby.mailState()).mailedN;
+    await get(`/p/lobby/inbox?add=note+one&by=${tag}-a1`);
+    await get(`/p/lobby/inbox?add=note+two&by=${tag}-a2`);
+    expect((await lobby.mailState()).nextMail).not.toBeNull();
+    expect(await lobby.flushInboxMail()).toBe(2);
+    expect((await lobby.mailState()).mailedN).toBe(before + 2);
+    expect(await lobby.flushInboxMail()).toBe(0);
+  });
+});
+
+describe("rate limits", () => {
+  it("answers 429 with Retry-After past 30 writes a minute per IP", async () => {
+    const { get, tag } = client();
+    let last: Response | undefined;
+    for (let i = 0; i < 31; i++) last = await get(`/p/lobby/${tag}/burst-${i}?set=x`);
+    expect(last!.status).toBe(429);
+    expect(last!.headers.get("retry-after")).toMatch(/^\d+$/);
+    expect(await last!.text()).toMatch(/^slow down: 30 writes a minute per IP\. retry in \d+s\n$/);
+    expect((await get(`/p/lobby/${tag}/burst-0`)).status).toBe(200);
+  });
+});
