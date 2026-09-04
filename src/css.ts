@@ -10,7 +10,7 @@ export const CSS = `
 :root{color-scheme:light;--paper:#e8dcc7;--paper-deep:#dfd2bf;--fog:#c7bcac;--fog-deep:#ab9d90;--ink:#282620;--ink-soft:#464133;--bark:#5e5846;--seal:#ab462f;--seal-deep:#963d29;--text:Literata,Georgia,"Times New Roman",serif;--mono:"Courier Prime","Courier New",Courier,monospace}
 *{box-sizing:border-box}
 html{background:var(--paper);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
-body{margin:0 auto;max-width:58rem;padding:0 1.25rem 2.5rem;font:17px/1.55 var(--text);color:var(--ink);text-wrap:pretty}
+body{margin:0 auto;max-width:58rem;padding:0 1.25rem 2.5rem;font:17px/1.55 var(--text);color:var(--ink);text-wrap:pretty;overflow-anchor:none}
 a{color:inherit;text-decoration:underline;text-decoration-color:var(--fog-deep);text-underline-offset:.18em;text-decoration-thickness:1px}
 @media(hover:hover){a:hover{text-decoration-color:var(--ink)}}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -69,7 +69,7 @@ details.manual summary::-webkit-details-marker{display:none}
 details.manual summary::before{content:"";flex:none;width:0;height:0;border:5px solid transparent;border-left:7px solid var(--ink-soft);margin-left:2px}
 details.manual[open]>summary::before{transform:rotate(90deg) translateX(1px)}
 details.manual summary h2{margin:0}
-details.manual .man{margin-top:.75rem}
+details.manual .man{margin-top:.75rem;scroll-margin-top:3.4rem}
 .man{font:14px/1.6 var(--mono);max-width:52rem;overflow-wrap:break-word}
 .man p{margin:0 0 .6rem}
 .man h3{font:600 15px/1.4 var(--text);margin:1.25rem 0 .4rem}
