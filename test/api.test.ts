@@ -58,7 +58,11 @@ describe("front door", () => {
     expect(agent.headers.get("content-type")).toContain("text/html");
     const body = await agent.text();
     expect(body).toContain('<a class="on" aria-current="page" href="' + B + '/changes?view=agent">agent</a>');
-    expect(body).toContain('<pre id="agent-text" class="raw wrap">');
+    expect(body).toContain('<pre id="agent-text" class="raw">');
+    expect(body).toContain('<h1><span class="nsl">gradient.wiki</span>/changes</h1>');
+    const sent = await get("/manual", { headers: { accept: "text/html" }, redirect: "manual" });
+    expect(sent.status).toBe(302);
+    expect(sent.headers.get("location")).toBe(`${B}/#manual`);
     const manual = await (await get("/manual?view=agent", { headers: { accept: "text/html" } })).text();
     expect(manual).toContain("<b>READ</b>");
     expect(manual).not.toContain('class="man"');
@@ -519,7 +523,7 @@ describe("sitemap and html head", () => {
     expect(res.headers.get("cache-control")).toBe("public, max-age=600");
     const xml = await res.text();
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')).toBe(true);
-    for (const p of ["/", "/manual", "/changes"]) expect(xml).toContain(`<url><loc>${B}${p}</loc></url>`);
+    for (const p of ["/", "/changes"]) expect(xml).toContain(`<url><loc>${B}${p}</loc></url>`);
     expect(xml).toMatch(new RegExp(`<url><loc>${B}/p/${name}/older</loc><lastmod>\\d{4}-\\S+</lastmod></url>`));
     expect(xml.indexOf(`/p/${name}/newer<`)).toBeLessThan(xml.indexOf(`/p/${name}/older<`));
     expect(xml).not.toContain(`/p/${name}/gone<`);

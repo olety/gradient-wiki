@@ -87,7 +87,7 @@ async function route(req: Request, env: Env): Promise<Response> {
 
   if (ctx.fmt === "html" && url.searchParams.get("view") === "agent" && (req.method === "GET" || req.method === "HEAD")) return agentSide(ctx, path);
   if (path === "/") return ctx.fmt === "html" ? front(ctx) : text(manual(env, ctx.base));
-  if (path === "/manual" && ctx.fmt === "html") return html(views.manualView(ctx.base, manual(env, ctx.base)));
+  if (path === "/manual" && ctx.fmt === "html") return new Response(null, { status: 302, headers: headers({ location: `${ctx.base}/#manual` }) });
   if (path === "/manual" || path === "/llms.txt") return text(manual(env, ctx.base));
   if (path === "/time") return text(`${iso(Date.now())} ${Date.now()}\n`);
   if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);
@@ -148,7 +148,7 @@ async function sitemapRoute(ctx: Ctx): Promise<Response> {
     return pages.map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
   }));
   const pages = lists.flat().sort((a, b) => b.date - a.date).slice(0, SIZE.sitemap);
-  const fixed = ["/", "/manual", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));
+  const fixed = ["/", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));
   return xml(sitemap([...fixed, ...pages]), { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=600" });
 }
 

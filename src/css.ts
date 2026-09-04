@@ -38,7 +38,7 @@ main{position:relative;margin:1.25rem 0;padding:2rem 1.75rem 2.25rem}
 .acts a{display:inline-block;padding:.5rem 0;color:var(--ink-soft);text-decoration:none}
 @media(hover:hover){.acts a:hover{color:var(--ink);text-decoration:underline}}
 h1{font:600 1.45rem/1.25 var(--text);margin:0 0 .6rem;text-wrap:balance}
-h2{font:600 1.1rem/1.3 var(--text);margin:2.25rem 0 .75rem;text-wrap:balance}
+h2{font:600 1.1rem/1.3 var(--text);margin:2.25rem 0 .75rem;text-wrap:balance;scroll-margin-top:1rem}
 article{max-width:42rem;overflow-wrap:break-word;overflow-x:auto}
 article code{white-space:nowrap}
 article :is(p,ul,ol,blockquote){margin:0 0 1rem}
@@ -51,20 +51,16 @@ figure{margin:0 0 1.25rem}
 .spot{display:block;width:min(24rem,100%);height:auto;margin:0 auto .75rem}
 .tag{font:600 1.6rem/1.25 var(--text);margin:.25rem 0 .5rem;text-wrap:balance}
 .lede{max-width:42rem;margin:0 0 1rem}
-.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1.25rem 2.5rem;margin:1.5rem 0 .5rem}
-.split p{margin:0 0 .5rem}
-.prompt{display:flex;align-items:flex-start;gap:.4rem;padding:.6rem .4rem .6rem .9rem}
+.prompt{max-width:42rem;display:flex;align-items:flex-start;gap:.4rem;padding:.6rem .4rem .6rem .9rem}
 .prompt code{flex:1;min-width:0;font:15px/1.55 var(--mono);overflow-wrap:break-word;padding:.35rem 0}
 .seg{display:inline-flex;border:1px solid var(--bark);border-radius:2px;overflow:hidden;font:14px/1 var(--mono)}
 .seg a{padding:.6rem .8rem;color:var(--ink-soft);text-decoration:none}
 .seg a.on{background:var(--ink);color:var(--paper)}
 @media(hover:hover){.seg a:not(.on):hover{background:var(--paper-deep);color:var(--ink)}}
-.raw{font:14px/1.6 var(--mono);white-space:pre;overflow-x:auto;margin:0}
-.raw.wrap{white-space:pre-wrap;overflow-wrap:break-word}
+.raw{font:14px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:break-word;margin:0}
+.raw.cols{white-space:pre;overflow-x:auto;font-size:13px}
 .raw b{font-weight:700}
 .raw .ph{color:var(--bark);font-style:italic}
-.h2row h2 a{text-decoration:none}
-@media(hover:hover){.h2row h2 a:hover{text-decoration:underline;text-decoration-color:var(--fog-deep)}}
 .man{font:14px/1.6 var(--mono);max-width:52rem;overflow-wrap:break-word}
 .man p{margin:0 0 .6rem}
 .man h3{font:600 15px/1.4 var(--text);margin:1.25rem 0 .4rem}
@@ -75,8 +71,7 @@ figure{margin:0 0 1.25rem}
 .man .m{color:var(--bark)}
 .man .ex{grid-column:2;color:var(--ink-soft)}
 .man .ph{color:var(--bark);font-style:italic}
-.h2row{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.25rem 1rem;margin:2.25rem 0 .75rem}
-.h2row h2{margin:0}
+.h1row{display:flex;align-items:center;justify-content:space-between;gap:1rem}
 button.icon{width:40px;height:40px;min-height:0;padding:0;margin:0;border:0;border-radius:2px;background:transparent;color:var(--ink-soft);display:inline-grid;place-items:center;flex:none}
 @media(hover:hover){button.icon:hover{color:var(--ink);background:var(--paper-deep)}.well button.icon:hover{background:var(--paper)}}
 ol.path{list-style:none;margin:0;padding:0 0 0 1.75rem}
@@ -111,12 +106,11 @@ button:active,input[type=submit]:active{transform:scale(.96)}
 .receipt{position:relative;max-width:42rem;margin:0 0 1rem}
 .receipt pre{margin:0;padding:1rem 5.5rem 1rem 1rem;white-space:pre-wrap;overflow-wrap:break-word}
 .receipt .stamp{position:absolute;right:.9rem;top:-.7rem;width:66px;height:66px;transform:rotate(-8deg)}
-.manual{white-space:pre;font:14px/1.55 var(--mono);margin:0}
 .empty{text-align:center;max-width:34rem;margin:1rem auto}
 .empty .mono{overflow-wrap:break-word}
 footer{border-top:1px solid var(--fog);padding:1rem 0 0;font:14px/1.6 var(--mono);color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
 p.notice{font:14px/1.6 var(--mono);color:var(--ink-soft);margin:0 0 1rem}
 .more{font:15px/1.6 var(--mono);margin:1rem 0 0}
-@media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}.head h1{font-size:1.5rem}.split{grid-template-columns:minmax(0,1fr)}.wm{order:-2}.seg{order:-1;margin-left:auto}header nav{margin-left:0}ol.path li{grid-template-columns:5.9rem minmax(0,1fr)}.t{font-size:13px}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}
+@media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}.head h1{font-size:1.5rem}.wm{order:-2}.seg{order:-1;margin-left:auto}header nav{margin-left:0}ol.path li{grid-template-columns:5.9rem minmax(0,1fr)}.t{font-size:13px}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}
 @media(prefers-reduced-motion:reduce){button:active,input[type=submit]:active{transform:none}}
 `.trim();
