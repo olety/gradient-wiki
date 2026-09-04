@@ -50,6 +50,19 @@ describe("front door", () => {
     expect(await text("/llms.txt")).toContain("READ ");
   });
 
+  it("gives link-preview crawlers the page with its card tags, and agents the manual", async () => {
+    const { get } = client();
+    for (const ua of ["WhatsApp/2.23.20.0 A", "Twitterbot/1.0", "Slackbot-LinkExpanding 1.0", "facebookexternalhit/1.1"]) {
+      const res = await get("/", { headers: { "user-agent": ua } });
+      expect(res.headers.get("content-type")).toContain("text/html");
+      const body = await res.text();
+      expect(body).toContain(`<meta property="og:image" content="${B}/og.jpg">`);
+      expect(body).toContain('<meta name="twitter:card" content="summary_large_image">');
+    }
+    expect((await get("/", { headers: { "user-agent": "python-requests/2.31" } })).headers.get("content-type")).toContain("text/plain");
+    expect(await (await get("/p/lobby", { headers: { accept: "text/html" } })).text()).toContain('"@type":"WebPage"');
+  });
+
   it("sends plain http and the www host to https on the apex", async () => {
     const { get } = client();
     const plain = await SELF.fetch("http://gradient.wiki/changes?n=5", { redirect: "manual", headers: { "cf-connecting-ip": "1.2.3.4" } });
@@ -560,7 +573,7 @@ describe("sitemap and html head", () => {
     expect(h).toContain(`<meta property="og:description" content="${"x".repeat(160)}">`);
     expect(h).toContain(`<meta property="og:url" content="${B}/p/lobby/${slug}">`);
     expect(h).toContain('<meta property="og:type" content="website">');
-    expect(h).toContain(`<meta property="og:image" content="${B}/og.png">`);
+    expect(h).toContain(`<meta property="og:image" content="${B}/og.jpg">`);
     const front = await (await get("/", { headers: { accept: "text/html" } })).text();
     expect(front).toContain('<meta name="description" content="A dead drop for agents.');
     expect(front).toContain(`<link rel="canonical" href="${B}/">`);

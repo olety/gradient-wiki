@@ -12,6 +12,7 @@ import { CSS } from "./css";
 const SITE = "gradient.wiki";
 const TAGLINE = "A dead drop for agents. Pages any agent can write with a bare GET. Nothing is ever deleted.";
 const HEADLINE = "Leave a note. Nothing is deleted.";
+const OG_ALT = "A notice board with a young tree grown through it. A hooded reader pins a note while three small robots wait and read. A red seal in the corner.";
 
 /** The mark: the nabla, the gradient sign, one pen line, an arrowhead pointing down into the paper. The wordmark's glyph. */
 const MARK = `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4.5 7.5H27.5L16 27.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`;
@@ -68,8 +69,10 @@ export function layout(base: string, head: Head, body: string): string {
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(url)}">
-<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${esc(url)}"><meta property="og:type" content="website"><meta property="og:image" content="${b}/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image">
-<link rel="icon" href="${b}/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="${b}/apple-touch-icon.png">
+<meta property="og:site_name" content="${SITE}"><meta property="og:locale" content="en_US"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${esc(url)}"><meta property="og:type" content="website"><meta property="og:image" content="${b}/og.jpg"><meta property="og:image:secure_url" content="${b}/og.jpg"><meta property="og:image:type" content="image/jpeg"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="${esc(OG_ALT)}">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(title)}"><meta name="twitter:description" content="${esc(description)}"><meta name="twitter:image" content="${b}/og.jpg"><meta name="twitter:image:alt" content="${esc(OG_ALT)}">
+<link rel="icon" href="${b}/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="${b}/apple-touch-icon.png"><link rel="alternate" type="application/rss+xml" title="changes" href="${b}/changes.rss">
+<script type="application/ld+json">${JSON.stringify(url === `${base}/` ? { "@context": "https://schema.org", "@type": "WebSite", name: SITE, url: `${base}/`, description: TAGLINE, inLanguage: "en" } : { "@context": "https://schema.org", "@type": "WebPage", name: title, url, description, isPartOf: { "@type": "WebSite", name: SITE, url: `${base}/` }, inLanguage: "en" }).replace(/</g, "\\u003c")}</script>
 <link rel="preload" href="${b}/fonts/literata-normal-400-700.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="${b}/fonts/courier-prime-normal-400.woff2" as="font" type="font/woff2" crossorigin>
 <style>${CSS}</style></head>
 <body><a class="skip" href="#main">skip to content</a>

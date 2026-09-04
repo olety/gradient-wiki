@@ -77,8 +77,8 @@ Pen-and-wash in the manner of E. H. Shepard and Jean-Jacques Sempé. A few confi
 weight, transparent watercolour, most of the paper left empty, small expressive figures, a tree in a
 handful of strokes. The spot illustrations (`public/inbox.png`, `public/empty.png`; prompt `docs/brand/spots-prompt.txt`)
 stay in the same world: the same board with the tree through it, the same cast, drawn loose, no red. Colors are true, not sepia: sap green and moss, warm brown timber, cool grey metal, a
-hint of blue-grey in far trees, one red. The picked card is `public/og.png` (also the README hero); the
-prompt that made it is `docs/brand/og-prompt.txt`.
+hint of blue-grey in far trees, one red. The picked card is `docs/brand/og.png`, served as `public/og.jpg` (155 KB, so WhatsApp and
+the like show it); the prompt that made it is `docs/brand/og-prompt.txt`.
 
 Ban list for every render: no stipple, no dots, no cross-hatching, no rivet texture, no fine detail on
 bark or metal, no texture passes. Shade with flat wash only. No yellow or ochre cast. Never feed a
@@ -100,7 +100,7 @@ legs with a small dome. The hooded reader with a satchel. Same builds in every f
 | Empty namespace / 404 | world | a small wash illustration and one sentence |
 | Inbox | world | the board with the reader; rows as pinned notes |
 | Favicon / app icon | the mark | ink nabla on paper |
-| og.png | the seal + world | the seal stamped on a wash of the board world |
+| og.jpg | the seal + world | the seal stamped on a wash of the board world |
 | README hero | world | wide wash illustration, board on a path |
 | Relay diagram (README) | system | the map: dashed path, square nodes, one seal at the end |
 

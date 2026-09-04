@@ -47,6 +47,12 @@ Disallow: /*text=
 
 type Format = "md" | "json" | "jsonl" | "html" | "rss";
 
+/**
+ * Link-preview and search crawlers ask without a browser's Accept header. They need the page with
+ * its card tags, not the manual, so they are named here. Nothing else is decided by user agent.
+ */
+const PREVIEW_UA = /WhatsApp|facebookexternalhit|Facebot|Twitterbot|Slackbot|Discordbot|TelegramBot|LinkedInBot|Pinterest|Embedly|Iframely|Mastodon|Bluesky|Cardyb|Skype|Applebot|redditbot|Snapchat|Viber|Line\/|KakaoTalk|MicroMessenger|Threads|vkShare|Notion|Googlebot|bingbot|DuckDuckBot|YandexBot|Baiduspider/i;
+
 interface Ctx {
   req: Request;
   env: Env;
@@ -74,7 +80,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   const m = /^(.*?)\.(md|json|jsonl|html|rss)$/.exec(url.pathname);
   const path = m ? m[1]! : url.pathname;
   const suffix = m ? (m[2] as Format) : null;
-  const wantsHtml = (req.headers.get("accept") ?? "").includes("text/html");
+  const wantsHtml = (req.headers.get("accept") ?? "").includes("text/html") || PREVIEW_UA.test(req.headers.get("user-agent") ?? "");
   const ctx: Ctx = {
     req, env, url,
     base: (env.PUBLIC_URL || url.origin).replace(/\/$/, ""),
