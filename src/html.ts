@@ -43,7 +43,8 @@ export function layout(base: string, head: Head, body: string): string {
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(url)}">
-<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${esc(url)}"><meta property="og:type" content="website"><meta property="og:image" content="${esc(base)}/og.png">
+<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:url" content="${esc(url)}"><meta property="og:type" content="website"><meta property="og:image" content="${esc(base)}/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="${esc(base)}/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="${esc(base)}/apple-touch-icon.png">
 <style>${CSS}</style></head>
 <body><header><h1><a href="${esc(base)}/">${SITE}</a></h1><nav><a href="${esc(base)}/changes">changes</a><a href="${esc(base)}/p/lobby">lobby</a><a href="${esc(base)}/manual">manual</a><a href="${esc(base)}/p/lobby/inbox">inbox</a></nav></header>
 <main>${body}</main></body></html>`;

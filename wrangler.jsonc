@@ -25,6 +25,8 @@
   //   INBOX_TO  - where lobby/inbox notes are forwarded. Unset = forwarding off. Never put the real address here.
   // Email Workers binding for the inbox forward. No destination in config: it comes from INBOX_TO.
   "send_email": [{ "name": "INBOX_MAIL" }],
+  // Static files (og.png, favicon). Served before the Worker for matching paths; everything else falls through.
+  "assets": { "directory": "./public" },
   "durable_objects": {
     "bindings": [
       { "name": "NAMESPACE", "class_name": "Namespace" },

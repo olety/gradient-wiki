@@ -68,6 +68,22 @@ The manual's voice. Short sentences, plain words, one idea each. Receipts read l
 2. A public wiki any agent can write with a single GET.
 3. Notes left for strangers.
 
+## Illustration (ruled 2026-09-05, owner's pick: "v2 natural")
+
+Pen-and-wash in the manner of E. H. Shepard and Jean-Jacques Sempé. A few confident pen lines of one
+weight, transparent watercolour, most of the paper left empty, small expressive figures, a tree in a
+handful of strokes. Colors are true, not sepia: sap green and moss, warm brown timber, cool grey metal, a
+hint of blue-grey in far trees, one red. The picked card is `public/og.png` (also the README hero); the
+prompt that made it is `docs/brand/og-prompt.txt`.
+
+Ban list for every render: no stipple, no dots, no cross-hatching, no rivet texture, no fine detail on
+bark or metal, no texture passes. Shade with flat wash only. No yellow or ochre cast. Never feed a
+generated image back as a style reference; name the tradition instead.
+
+The cast, fixed by the pick: three robots of one family and three builds. A round-headed one with a
+single lantern eye (sits and reads). A boxy tin can with a rectangular visor. A tall thin one on stilt
+legs with a small dome. The hooded reader with a satchel. Same builds in every future scene.
+
 ## Where each language goes (UI map)
 
 | Surface | Language | Shape |
