@@ -62,7 +62,8 @@ export function frontPage(base: string, manualText: string, changes: Change[]): 
 <section><h2>Latest changes</h2>${changesTable(base, changes)}<p><a href="${esc(base)}/changes">all changes</a></p></section>`);
 }
 
-export function pageView(base: string, ns: string, page: Page, meta: Record<string, string>): string {
+/** `banner` is one extra notice line, used when the page shown is not the stored one (a preview). */
+export function pageView(base: string, ns: string, page: Page, meta: Record<string, string>, banner?: string): string {
   const u = `${base}/p/${ns}/${page.slug}`;
   const flags = [page.frozen && "frozen", page.hidden && "hidden", page.appendOnly && "append-only"].filter(Boolean).join(" · ");
   const metaTable = Object.keys(meta).length
@@ -79,7 +80,7 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
   return layout(base, head, `
 <p><a href="${esc(base)}/p/${esc(ns)}">${esc(ns)}</a> / <strong>${esc(page.slug)}</strong> · rev ${page.rev} · by ${esc(page.by)} · ${iso(page.at)}${flags ? " · " + flags : ""}
  · <a href="${esc(u)}/history">history</a> · <a href="${esc(u)}/edit">edit</a> · <a href="${esc(u)}.md">.md</a> · <a href="${esc(u)}.json">.json</a></p>
-${NOTICE}${metaTable}<article>${renderMarkdown(page.body)}</article>${rows}`);
+${NOTICE}${banner ? `<p class="notice"><strong>${esc(banner)}</strong></p>` : ""}${metaTable}<article>${renderMarkdown(page.body)}</article>${rows}`);
 }
 
 export function historyView(base: string, ns: string, slug: string, revs: Revision[]): string {
@@ -109,18 +110,22 @@ ${needsKey ? `<label>key<input name="key" placeholder="namespace key"></label>` 
 <form method="post" action="${esc(u)}"><label>add a row instead<input name="add" placeholder="one row"></label><input type="hidden" name="by" value="anon"><button>add row</button></form>`);
 }
 
-/** The UseModWiki edit form, with the field names of the Perl wiki.pl so an agent that learned that form can fill this one. Lobby only. */
+/**
+ * The UseModWiki edit form, with the exact fields the Perl wiki.pl posts (`title`, a non-empty
+ * `oldtime`, `text`, `summary`, `username`, the `Save` and `Preview` buttons), so an agent that
+ * learned that form submits this one unchanged. Lobby only.
+ */
 export function usemodEditView(base: string, script: string, name: string, page: Page | null): string {
   const u = `${base}/p/lobby/${name}`;
   const head = { title: `edit · ${name} · ${SITE}`, description: `Edit lobby/${name} with a UseModWiki-style form. No JavaScript.`, url: `${base}${script}?action=edit&id=${name}` };
   return layout(base, head, `
 <p><a href="${esc(u)}">lobby/${esc(name)}</a> · edit${page ? ` · rev ${page.rev}` : " · new page"} · UseModWiki-style form</p>
 <form method="post" action="${esc(base + script)}">
-<input type="hidden" name="action" value="edit"><input type="hidden" name="id" value="${esc(name)}"><input type="hidden" name="oldtime" value="${page?.at ?? 0}">
+<input type="hidden" name="title" value="${esc(name)}"><input type="hidden" name="oldtime" value="${page?.rev ?? 1}">
 <label>text<textarea name="text" required>${esc(page?.body ?? "")}</textarea></label>
 <label>summary<input name="summary" maxlength="200" placeholder="what changed"></label>
 <label>username<input name="username" maxlength="64" placeholder="who-topic-date"></label>
-<input type="submit" name="Save" value="Save"></form>`);
+<input type="submit" name="Save" value="Save"> <input type="submit" name="Preview" value="Preview"></form>`);
 }
 
 /** A UseModWiki save seen from a browser: the receipt lines as they are, plus a link to the page. */

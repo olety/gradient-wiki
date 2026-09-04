@@ -662,7 +662,9 @@ describe("usemod dialect", () => {
     expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const h = await res.text();
     expect(h).toContain(`<form method="post" action="${B}/wiki.pl">`);
-    for (const f of ['name="action" value="edit"', 'name="id" value="SandBox"', '<textarea name="text"', 'name="summary"', 'name="username"', 'name="oldtime"', 'name="Save"']) expect(h).toContain(f);
+    for (const f of ['name="title" value="SandBox"', '<textarea name="text"', 'name="summary"', 'name="username"', 'name="Save"', 'name="Preview"']) expect(h).toContain(f);
+    expect(h).toMatch(/name="oldtime" value="[^"]+"/);
+    expect(h).not.toContain('name="id"');
     expect(h).toContain(SEED_PAGES.SandBox);
     expect(await (await get("/cgi-bin/wiki.cgi?action=edit&id=SandBox")).text()).toContain(`action="${B}/cgi-bin/wiki.cgi"`);
   });
@@ -706,6 +708,41 @@ describe("usemod dialect", () => {
     expect(page).toContain(`saved rev 4 ${u}`);
     expect(page).toContain("undo: ");
     expect(page).toContain(`<a href="${u}">lobby/${name}</a>`);
+  });
+
+  it("saves the real wiki.pl grammar, title + oldtime + text + Save, over GET or POST", async () => {
+    const { get, text, json, receipt, tag } = client();
+    const name = `${tag}/PerlPage`;
+    const u = `${B}/p/lobby/${name}`;
+    await receipt(`/wiki.pl?title=${name}&oldtime=1&text=hello&summary=hi&username=perl-agent&Save=Save`, `saved rev 1 ${u}`);
+    expect(await json<Record<string, unknown>>(`/p/lobby/${name}.json`)).toMatchObject({ rev: 1, by: "perl-agent", note: "hi", body: "hello" });
+    await receipt(`/cgi-bin/wiki.cgi?title=${name}&oldtime=1723456789&text=second`, `saved rev 2 ${u}`);
+    const form = new URLSearchParams({ title: name, oldtime: "2", text: "third\nline", summary: "form", username: "browser-agent", Save: "Save" });
+    await receipt("/wiki.pl", `saved rev 3 ${u}`, { method: "POST", body: form });
+    expect(await text(`/p/lobby/${name}`)).toBe("third\nline");
+    expect(await text(`/p/lobby/${name}/history`)).toContain("by browser-agent set +10 form");
+    expect(await text(`/wiki.pl?title=${name}&oldtime=3&text=third%0Aline&Save=Save`)).toBe(`unchanged rev 3 ${u}\n`);
+    expect((await get("/wiki.pl?title=Bad%20Name&oldtime=1&text=x&Save=Save")).status).toBe(400);
+    expect((await get(`/wiki.pl?title=${name}&oldtime=1&Save=Save`)).status).toBe(400);
+  });
+
+  it("previews without saving when Preview is sent instead of Save", async () => {
+    const { get, text, tag } = client();
+    const name = `${tag}/PreviewPage`;
+    const res = await get(`/wiki.pl?title=${name}&oldtime=1&text=%23+draft&Preview=Preview`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(await res.text()).toBe("preview, not saved\n\n# draft");
+    expect((await get(`/p/lobby/${name}`)).status).toBe(404);
+    const h = await get("/wiki.pl", { method: "POST", body: new URLSearchParams({ title: name, oldtime: "1", text: "# draft", username: "drafter", Preview: "Preview" }), headers: { accept: "text/html" } });
+    expect(h.headers.get("content-type")).toContain("text/html");
+    const page = await h.text();
+    expect(page).toContain("preview, not saved");
+    expect(page).toContain("<h1>draft</h1>");
+    expect(page).toContain("by drafter");
+    expect((await get(`/p/lobby/${name}`)).status).toBe(404);
+    expect(await text("/changes")).not.toContain(name);
   });
 
   it("maps history and index onto the lobby", async () => {

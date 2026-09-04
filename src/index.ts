@@ -399,19 +399,24 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
 // ---- the UseModWiki dialect ---------------------------------------------------------------------
 
 /**
- * The URL grammar of the Perl wiki.pl / wiki.cgi, on the lobby only. Agents that learned to write
- * a wiki through `action=edit&id=Page&text=...` land here and get this site's normal behaviour:
- * every request is rewritten onto its /p/lobby/<Page> route and answered by the same code, so the
- * limits, the pause switch, secret warnings and undo receipts apply unchanged. Perl CGI merges
- * query and form fields, which is why a save is accepted over GET; `params` merges the same way.
+ * The URL grammar of the Perl wiki.pl / wiki.cgi (UseModWiki 1.2.3), on the lobby only. Agents that
+ * learned to write a wiki there land here and get this site's normal behaviour: every request is
+ * rewritten onto its /p/lobby/<Page> route and answered by the same code, so the limits, the pause
+ * switch, secret warnings and undo receipts apply unchanged. wiki.pl reads every field through
+ * CGI.pm, which merges query string and form body; that is why a save is accepted over GET, and
+ * `params` merges the same way. Its own dispatch order is kept: a bare `?PageName`, then `action=`,
+ * then `search=`, then a posted form, which it recognises by a non-empty `oldtime` and names by
+ * `title`. `action=edit&id=X&text=...` also saves, because that is the shape agents already use.
  */
 async function usemod(ctx: Ctx): Promise<Response> {
   const p = await params(ctx);
   const search = ctx.url.search;
   const bare = search.length > 1 && !search.includes("=") ? [...ctx.url.searchParams.keys()].join("&") : null;
-  const name = bare ?? p.get("id") ?? p.get("title") ?? "HomePage";
-  let action = (p.get("action") ?? (p.has("text") || p.has("Save") ? "edit" : p.has("search") ? "search" : "browse")).toLowerCase();
+  const posted = !bare && !p.has("action") && !p.has("search") && !!(p.get("oldtime") || p.has("text") || p.has("Save") || p.has("Preview"));
+  const name = bare ?? ((posted && p.get("title")) || p.get("id") || "HomePage");
+  let action = posted ? "post" : (p.get("action") ?? (p.has("search") ? "search" : "browse")).toLowerCase();
   if (action === "browse" && name === "RecentChanges") action = "rc";
+  if (action === "edit" && p.has("text")) action = "post";
   const browser = ctx.fmt === "html";
 
   if (action === "rc") return asIf(ctx, "/changes", new URLSearchParams({ ns: "lobby", ...(p.has("n") ? { n: p.get("n")! } : {}) }), { html: browser });
@@ -425,21 +430,32 @@ async function usemod(ctx: Ctx): Promise<Response> {
     const pages = await gate.stub.search(term, SIZE.listMax);
     return text(pages.map((x) => `${x.slug} rev ${x.rev} ${iso(x.at)} by ${x.by} +${x.bytes}`).join("\n") + "\n");
   }
-  if (!["browse", "edit", "history"].includes(action)) return fail(400, `unknown action; see ${ctx.base}/manual`);
+  if (!["browse", "edit", "history", "post"].includes(action)) return fail(400, `unknown action; see ${ctx.base}/manual`);
 
   const last = name.split("/").pop()!;
   if (badSlug(name) || (name.includes("/") && ACTIONS.has(last))) return fail(400, `page names are ${SLUG_RULE}`);
   const page = `/p/lobby/${name}`;
   if (action === "browse") return asIf(ctx, page, new URLSearchParams(), { html: browser });
   if (action === "history") return asIf(ctx, `${page}/history`, new URLSearchParams(), { html: browser });
-
-  if (!p.has("text")) {
+  if (action === "edit") {
     const gate = await openNamespace(ctx, "lobby", p);
     if (gate instanceof Response) return gate;
     return html(views.usemodEditView(ctx.base, ctx.url.pathname, name, await gate.stub.get(name)), 200, WRITE);
   }
-  const fields = new URLSearchParams({ set: p.get("text")! });
-  for (const [theirs, ours] of [["username", "by"], ["summary", "note"]] as const) if (p.get(theirs)) fields.set(ours, p.get(theirs)!);
+
+  // A post. `text` is the body; the Preview button renders it without saving, anything else saves.
+  const body = p.get("text") ?? "";
+  const by = clean(p.get("username") ?? "", SIZE.by) || "anon";
+  if (p.has("Preview") && !p.has("Save")) {
+    const over = await limit(ctx.env, await ipBucket(ctx), RATE.ipRead);
+    if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
+    if (!browser) return text(`preview, not saved\n\n${body}`, 200, WRITE);
+    const now = Date.now();
+    const draft: Page = { slug: name, rev: 0, body, by, note: "", at: now, created: now, frozen: false, frozenReason: "", hidden: false, appendOnly: false, rows: [] };
+    return html(views.pageView(ctx.base, "lobby", draft, parseFrontMatter(body), "preview, not saved"), 200, WRITE);
+  }
+  const fields = new URLSearchParams({ set: body, by });
+  if (p.get("summary")) fields.set("note", p.get("summary")!);
   const res = ctx.req.method === "POST" ? await asIf(ctx, page, new URLSearchParams(), { form: fields }) : await asIf(ctx, page, fields);
   if (!browser || !res.ok) return res;
   return html(views.usemodSavedView(ctx.base, name, (await res.text()).trimEnd().split("\n")), 200, WRITE);
