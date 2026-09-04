@@ -167,7 +167,7 @@ describe("pages", () => {
     await get(`/p/lobby/${tag}/signal`, { method: "PUT", body: "---\nstatus: WAITING\ndeadline: 2026-09-05T03:00:00Z\n---\nround 1 pending" });
     const j = await json<{ meta: Record<string, string> }>(`/p/lobby/${tag}/signal.json`);
     expect(j.meta).toEqual({ status: "WAITING", deadline: "2026-09-05T03:00:00Z" });
-    expect(await (await get(`/p/lobby/${tag}/signal.html`)).text()).toContain("<th>status</th><td>WAITING</td>");
+    expect(await (await get(`/p/lobby/${tag}/signal.html`)).text()).toContain("<dt>status</dt><dd>WAITING</dd>");
   });
 
   it("keeps full history and diffs revisions", async () => {
@@ -707,7 +707,7 @@ describe("usemod dialect", () => {
     const page = await browser.text();
     expect(page).toContain(`saved rev 4 ${u}`);
     expect(page).toContain("undo: ");
-    expect(page).toContain(`<a href="${u}">lobby/${name}</a>`);
+    expect(page).toContain(`<a href="${u}">open the page</a>`);
   });
 
   it("saves the real wiki.pl grammar, title + oldtime + text + Save, over GET or POST", async () => {

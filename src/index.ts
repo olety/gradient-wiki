@@ -101,7 +101,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   const page = /^\/p\/([^/]+)(?:\/(.+))?$/.exec(path);
   if (page) return page[2] ? pageRoute(ctx, page[1]!, page[2]) : nsList(ctx, page[1]!);
 
-  return fail(404, `no such route. the manual is at ${ctx.base}/manual`);
+  return notFound(ctx, `no such route. the manual is at ${ctx.base}/manual`);
 }
 
 // ---- static-ish ---------------------------------------------------------------------------------
@@ -228,7 +228,7 @@ async function openNamespace(ctx: Ctx, ns: string, p: Map<string, string>): Prom
   if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
   const stub = namespace(ctx.env, ns);
   const info = await stub.open(ns);
-  if (!info.exists) return fail(404, `no such namespace ${ns}. create it: ${ctx.base}/ns/new?name=${ns}`);
+  if (!info.exists) return notFound(ctx, `no such namespace ${ns}. create it: ${ctx.base}/ns/new?name=${ns}`);
   const key = p.get("key");
   const keyHash = key ? await sha256Hex(key) : null;
   if (info.private && !(keyHash && (await stub.checkKey(keyHash)))) return fail(401, `namespace ${ns} is private. add ?key=<key>.`);
@@ -297,7 +297,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   const rev = p.has("rev") ? Number(p.get("rev")) : undefined;
   if (rev !== undefined && !Number.isInteger(rev)) return fail(400, "?rev= must be an integer.");
   const page = await stub.get(slug, rev);
-  if (!page) return fail(404, rev !== undefined ? `no rev ${rev} of ${ns}/${slug}.` : `no page ${ns}/${slug}. write it: ${pageUrl}?set=hello`);
+  if (!page) return notFound(ctx, rev !== undefined ? `no rev ${rev} of ${ns}/${slug}.` : `no page ${ns}/${slug}. write it: ${pageUrl}?set=hello`, rev === undefined ? `${pageUrl}/edit` : undefined);
   const revHeader = { "x-rev": String(page.rev) };
   switch (ctx.fmt) {
     case "json":
@@ -642,6 +642,12 @@ function xml(body: string, extra?: Record<string, string>): Response {
   return new Response(body, { status: 200, headers: headers({ "content-type": "application/rss+xml; charset=utf-8", ...extra }) });
 }
 
+/** A 404 for browsers is a page (the empty board, one next step); for everything else the text line. */
+function notFound(ctx: Ctx, message: string, editUrl?: string): Response {
+  if (ctx.fmt === "html") return html(views.notFoundView(ctx.base, message, editUrl), 404, WRITE);
+  return fail(404, message);
+}
+
 function fail(status: number, message: string): Response {
   return text(message + "\n", status, status >= 400 ? WRITE : undefined);
 }
@@ -654,5 +660,6 @@ function tooMany(retryAfter: number, rule: string): Response {
 function receipt(ctx: Ctx, action: string, fields: Record<string, unknown>, lines: string[]): Response {
   const first = lines[0]!;
   if (ctx.fmt === "json") return json({ ok: true, action, ...fields, url: first.slice(first.lastIndexOf(" ") + 1) }, 200, WRITE);
+  if (ctx.fmt === "html") return html(views.receiptView(ctx.base, action, lines), 200, WRITE);
   return text(lines.join("\n") + "\n", 200, WRITE);
 }

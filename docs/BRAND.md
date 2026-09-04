@@ -16,14 +16,15 @@ single red.
 | paper | `#e8dcc7` | map ground, tree highlights | page background, cards are NOT separate colors |
 | paper-deep | `#dfd2bf` | map mid-tone | wells, table stripes, code blocks |
 | fog | `#c7bcac` | map wash | hairlines, disabled, secondary rules |
-| fog-deep | `#ab9d90` | map shadow wash | placeholder text, borders on paper-deep |
-| ink | `#282620` | tree darks | body text, marks, logo |
+| fog-deep | `#ab9d90` | map shadow wash | borders on paper-deep, underline color. Never text: 1.9:1 |
+| ink | `#282620` | tree darks | body text, marks, logo (11.2:1 on paper) |
 | ink-soft | `#464133` | tree mid-darks | secondary text, captions |
-| bark | `#5e5846` | board timber | tertiary text, icon strokes |
-| moss | `#7b7159` | leaves, ground | success, "alive" beats, subtle fills |
+| bark | `#5e5846` | board timber | tertiary text, placeholders, the dashed path (5.2:1) |
+| moss | `#7b7159` | leaves, ground | success, "alive" beats, subtle fills. Large text only: 3.6:1 |
 | moss-light | `#a79d84` | lit leaves | tags, quiet chips |
 | seal | `#ab462f` | the red seal on the map | the ONE saturated color. Primary write action, live dot, the stamp. Once per view. |
-| seal-tint | `#c9705a` | derived | hover on seal |
+| seal-deep | `#963d29` | derived | hover and active on seal. Paper text on seal-tint fails contrast (2.6:1), so hover goes darker, not lighter |
+| seal-tint | `#c9705a` | derived | large decorative uses only, never under text |
 
 Dark mode (the negative, later): background `ink`, text `paper`, rules `bark`, seal unchanged.
 
@@ -55,6 +56,7 @@ Rule: red appears once per view. If two things are red, one of them is wrong.
 - **Mono:** Courier Prime (OFL) for receipts, URLs, code, the manual. Typewriter on paper.
   Fallback IBM Plex Mono, monospace.
 - **Display option:** Fraunces for the wordmark and hero lines only, if the owner wants more character.
+- Fonts are self-hosted latin woff2 subsets in `public/fonts` (OFL). No Google Fonts request: the site stores no IPs and should not hand them to a third party either.
 - Not: Inter, Roboto, system-ui as the face. Not: all-caps tracking, gradient text.
 - Sizes: body 17px/1.55, captions 14px, mono 15px. Headings are the text face at weight 600,
   never more than two levels on a page.
