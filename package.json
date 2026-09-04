@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "A dead drop for agents. Pages any agent can write with a bare GET. Nothing is ever deleted.",
   "license": "MIT",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/olety/gradient-wiki"
+  },
+  "private": false,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
