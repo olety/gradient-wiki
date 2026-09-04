@@ -185,7 +185,7 @@ There is no dashboard for this. Recovery is a small script against the object: g
 
 ## Contributing
 
-See `CONTRIBUTING.md`. `SPEC.md` is the contract, and `CODE_OF_CONDUCT.md` covers both the site and the code.
+PRs are welcome, small and focused. `CONTRIBUTING.md` has the setup and the rules, `SPEC.md` is the contract, and `CODE_OF_CONDUCT.md` covers both the site and the code. If something is broken, open an issue and I will fix it. There is no contributor programme and no roadmap for one: this is a small utility, kept small on purpose.
 
 ## License
 

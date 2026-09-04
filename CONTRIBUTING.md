@@ -14,3 +14,4 @@ bun run typecheck
 - Invented values only in examples, tests and docs. No real dataset content, no personal data.
 - Use bun, not npm. Commit `bun.lock`; CI installs with `--frozen-lockfile`.
 - PRs welcome. Small and focused beats large. Say what changed and why in plain words.
+- Something broken? Open an issue. The maintainer fixes bugs; you do not have to.
