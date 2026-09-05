@@ -786,7 +786,7 @@ describe("usemod dialect", () => {
     const page = await h.text();
     expect(page).toContain("preview, not saved");
     expect(page).toContain("<h1>draft</h1>");
-    expect(page).toContain(" · drafter · ");
+    expect(page).toContain(' · <span class="guest">guest</span> drafter · ');
     expect((await get(`/p/lobby/${name}`)).status).toBe(404);
     expect(await text("/changes")).not.toContain(name);
   });
@@ -824,5 +824,59 @@ describe("usemod dialect", () => {
     expect(manual).toContain("OLD DIALECT");
     expect(manual.split("\n").length).toBeLessThanOrEqual(60);
     expect(await (await get("/", { headers: { accept: "text/html" } })).text()).toContain("UseModWiki-style URLs supported");
+  });
+});
+
+describe("the seal", () => {
+  it("marks a write made with the moderator key, in every view, and logs it", async () => {
+    const { get, text, json, tag } = client();
+    const slug = `${tag}/sealed`;
+    const u = `${B}/p/lobby/${slug}`;
+    expect((await get(`/p/lobby/${slug}?mod=wrong&set=notice`)).status).toBe(403);
+    expect((await get(`/p/lobby/${slug}`)).status).toBe(404);
+    const lines = (await text(`/p/lobby/${slug}?mod=test-mod-key&set=notice&by=olety`)).trimEnd().split("\n");
+    expect(lines[0]).toBe(`saved rev 1 ${u}`);
+    expect(lines[1]).toBe("sealed by olety");
+    expect(lines[2]).toMatch(UNDO);
+    expect(await json<{ sealed: boolean; by: string }>(`/p/lobby/${slug}.json`)).toMatchObject({ sealed: true, by: "olety" });
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 1 \S+ by olety \[sealed\] set \+6 \n$/);
+    expect((await text("/changes")).split("\n").find((l) => l.includes(slug))).toMatch(/ rev 1 set by olety \[sealed\] \+6$/);
+    expect((await text("/log")).split("\n").find((l) => l.includes(slug))).toMatch(new RegExp(` lobby/${slug} seal rev 1 by olety$`));
+    // a sealed row: the text view carries the marker, the HTML the small seal; a guest's row says guest
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&add=from+the+house`)).toMatch(/^added row 1 rev 2 \S+\nsealed by gradient\.wiki\n/);
+    await get(`/p/lobby/${slug}?add=from+a+guest&by=admin`);
+    expect(await text(`/p/lobby/${slug}`)).toBe("notice\n\n## rows\n- [sealed by gradient.wiki] from the house\n- from a guest\n");
+    const rows = (await json<{ sealed: boolean; rows: { by: string; sealed: boolean }[] }>(`/p/lobby/${slug}.json`));
+    expect(rows.sealed).toBe(false); // the latest write was a guest's
+    expect(rows.rows).toMatchObject([{ by: "gradient.wiki", sealed: true }, { by: "admin", sealed: false }]);
+    const html = await text(`/p/lobby/${slug}`, { headers: { accept: "text/html" } });
+    expect(html).toContain('<svg class="seal-s"');
+    expect(html).toContain('<span class="guest">guest</span> admin');
+    expect(html).not.toContain('<span class="guest">guest</span> gradient.wiki');
+    const history = await text(`/p/lobby/${slug}/history`, { headers: { accept: "text/html" } });
+    expect(history.match(/class="seal-s"/g)?.length).toBe(2);
+    expect(history).toContain('<span class="guest">guest</span> admin');
+    expect((await json<{ changes: { by: string; sealed: boolean }[] }>(`/changes.json?ns=lobby`)).changes.find((c) => c.by === "olety")).toMatchObject({ sealed: true });
+  });
+
+  it("passes frozen and append-only, which a guest cannot", async () => {
+    const { get, text, tag } = client();
+    const slug = `${tag}/house`;
+    await get(`/p/lobby/${slug}?set=start`);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&append_only=1`);
+    expect((await get(`/p/lobby/${slug}?set=vandal`)).status).toBe(423);
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&set=the+house+text`)).toMatch(/^saved rev 2 /);
+    await get(`/p/lobby/${slug}?mod=test-mod-key&freeze=1&reason=calm`);
+    expect((await get(`/p/lobby/${slug}?add=guest+row`)).status).toBe(423);
+    expect(await text(`/p/lobby/${slug}?mod=test-mod-key&add=house+row`)).toMatch(/^added row 1 rev 3 /);
+    expect(await text(`/p/lobby/${slug}`)).toBe("the house text\n\n## rows\n- [sealed by gradient.wiki] house row\n");
+  });
+
+  it("is explained in the manual and on the inbox", async () => {
+    const { text } = client();
+    expect(await text("/manual")).toContain("A write marked [sealed] was made with this site's moderator key");
+    expect(await text("/p/lobby/inbox")).toContain("Only a row with the seal is from the person who runs this site.");
+    const front = await text("/", { headers: { accept: "text/html" } });
+    expect(front).toContain("Every other name is a guest, whatever it says.");
   });
 });

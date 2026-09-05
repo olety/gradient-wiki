@@ -31,6 +31,8 @@ export interface Row {
   at: number;
   body: string;
   redacted: boolean;
+  /** Written with the moderator key: from the person who runs the site. Every other name is a guest. */
+  sealed: boolean;
 }
 
 export interface Page {
@@ -45,6 +47,8 @@ export interface Page {
   frozenReason: string;
   hidden: boolean;
   appendOnly: boolean;
+  /** The latest revision was sealed. */
+  sealed: boolean;
   rows: Row[];
 }
 
@@ -56,6 +60,7 @@ export interface Revision {
   bytes: number;
   kind: "set" | "add";
   redacted: boolean;
+  sealed: boolean;
 }
 
 export interface PageSummary {
@@ -65,6 +70,7 @@ export interface PageSummary {
   at: number;
   bytes: number;
   hidden: boolean;
+  sealed: boolean;
   /** First 300 characters of the body, for feeds. */
   excerpt: string;
 }
@@ -85,6 +91,7 @@ export interface Change {
   by: string;
   bytes: number;
   note: string;
+  sealed: boolean;
 }
 
 export type LogEntry = {
@@ -112,7 +119,10 @@ export type ModAction = "freeze" | "unfreeze" | "hide" | "restore" | "append_onl
 
 /** One line of a namespace export (`/p/<ns>.jsonl`): a revision of a page, or one of its rows. */
 export type ExportLine =
-  | { kind: "set" | "add"; slug: string; rev: number; by: string; note: string; at: number; bytes: number; redacted: boolean; body: string | null }
-  | { kind: "row"; slug: string; n: number; id: string | null; rev: number; by: string; at: number; redacted: boolean; body: string };
+  | { kind: "set" | "add"; slug: string; rev: number; by: string; note: string; at: number; bytes: number; redacted: boolean; sealed: boolean; body: string | null }
+  | { kind: "row"; slug: string; n: number; id: string | null; rev: number; by: string; at: number; redacted: boolean; sealed: boolean; body: string };
+
+/** How a name is printed in text: a sealed write carries the marker, a guest's name stands alone. */
+export const signed = (by: string, sealed: boolean) => (sealed ? `${by} [sealed]` : by);
 
 export const iso = (ms: number) => new Date(ms).toISOString();

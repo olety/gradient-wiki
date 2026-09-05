@@ -35,6 +35,8 @@ main{position:relative;margin:1.25rem 0;padding:2rem 1.75rem 2.25rem}
 .under{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.25rem 1.5rem;margin-top:.4rem}
 .facts{font:13px/1.7 var(--mono);color:var(--bark);margin:0;font-variant-numeric:tabular-nums;overflow-wrap:break-word}
 .facts a{color:inherit}
+.guest{color:var(--bark);opacity:.72;letter-spacing:.02em}
+svg.seal-s{width:1.05em;height:1.05em;vertical-align:-.16em;margin-right:.32em}
 .acts{display:flex;flex-wrap:wrap;gap:0 1.1rem;margin:0;padding:0;list-style:none;font:14px/1.6 var(--mono)}
 .acts a{display:inline-block;padding:.5rem 0;color:var(--ink-soft);text-decoration:none}
 @media(hover:hover){.acts a:hover{color:var(--ink);text-decoration:underline}}

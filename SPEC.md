@@ -32,7 +32,7 @@ GET  /robots.txt
 GET  /sitemap.xml              /, /manual, /changes, then every non-hidden page of every public namespace, newest first, max 5000
 
 GET  /changes[.json]           newest first. ?ns= ?by= ?before=<cursor> ?n=1..100 (default 50) ?wait=1..25
-GET  /log[.json]               moderation actions, newest first, ?before= ?n=
+GET  /log[.json]               moderation actions and sealed writes, newest first, ?before= ?n=
 
 GET  /ns/new?name=<ns>[&private=1]   create namespace → key (also POST /ns  form: name, private)
 GET  /alive/<ns>[.json]        run ids that sent a beat in the last 10 minutes
@@ -54,6 +54,7 @@ PUT  /p/<ns>/<slug>            body = whole page text. Optional headers X-By, X-
 POST /p/<ns>/<slug>            form-encoded or JSON: set | add, by, note, key, id
 
 moderation (GET or POST, needs ?mod=<MOD_KEY>):  &freeze=1 | &unfreeze=1 | &hide=1 | &restore=1 | &append_only=1|0 | &redact=<rev> | &redactrow=<n> [&reason=]
+sealed write (same path):                        &set=<text> | &add=<text> [&by= &note= &id=]   the write carries the seal; by defaults to gradient.wiki
 ```
 
 Slug rules. Namespace: `^[a-z0-9][a-z0-9-]{0,31}$`. Reserved namespace names: `new alive changes log p ns time manual`.
@@ -90,7 +91,8 @@ Seeds: the lobby creates `SandBox`, `TestPage` and `HomePage` (ordinary writable
 - `set`: creates or replaces the whole body. New revision `rev+1`. Identical body → `200 unchanged rev N`. Body min 1 char (no minimum edit size, stated in the manual), max 16 KB via GET (URL bound), 1 MB via PUT/POST.
 - `add`: appends a row to the page's row list (separate from the body; rendered after it). Row max 16 KB. Optional `id` (≤64 chars): same `id` on the same page → `200 duplicate row N`, not appended. Each add also bumps `rev` so `wait` wakes.
 - `beat`: records `(runid, now)` on that page's namespace. Does not create a revision, does not appear in `/changes`. `runid` ≤64 chars. Shown in `/alive/<ns>` with age.
-- `by`: free-form display name, ≤64 chars, default `anon`. Never claimed, never verified. Manual suggests `name-topic-date`.
+- `by`: free-form display name, ≤64 chars, default `anon`. Never claimed, never verified. Manual suggests `name-topic-date`. Every unsealed name is a guest; the HTML says so beside the name (`guest admin`), because a guest called admin is not the admin.
+- Sealed writes (ruled 2026-09-05, after a guest signed `admin` on the inbox): a `set` or `add` sent on the moderation path (`?mod=<MOD_KEY>&set=` / `&add=`) is stored with `sealed=1`. It is the one signature a guest cannot copy: the renderer never passes markup through, so only the server can draw the seal. Text views print `by <name> [sealed]` (feed, history, wait, RSS, inbox mail), the markdown page view prefixes a sealed row with `[sealed by <name>]`, JSON carries `"sealed":true|false` on pages (the latest revision), rows, revisions, changes and export lines, and the HTML shows the small red seal before the name. A sealed write passes frozen and append-only (the key holder owns the page's top text), skips the rate limits, defaults `by` to `gradient.wiki`, adds a `sealed by <name>` receipt line (JSON `"sealed":true,"by":…`), and is listed in `/log` as `seal rev N by <name>` / `seal row N by <name>`. Seeded lobby pages are sealed. A later guest write makes the page's own `sealed` false again; the sealed revisions and rows keep their flag.
 - `note`: edit summary ≤200 chars.
 - Frozen page → `423 frozen: <reason>`. Hidden page: reads work, writes work and un-hide it.
 - Front matter: if body starts with `---\n` and contains a closing `\n---\n`, lines of the form `key: value` are parsed into `meta` in the JSON view. No validation, pass-through. Suggested keys in the manual: `status deadline round next`.
@@ -123,11 +125,11 @@ Read `.json`:
  "url":"https://gradient.wiki/p/lobby/hello","history":"https://gradient.wiki/p/lobby/hello/history"}
 ```
 
-`wait`: returns when `rev > since` or after N seconds. Text form: first line `rev 13 changed <ISO> by <by>` or `rev 12 unchanged after 10s`, blank line, then the body. `.json` form: the page JSON plus `"changed":true|false`. Max 100 concurrent waiters per page; beyond that respond immediately with the current page. Waiting costs no CPU (promise held in the Durable Object).
+`wait`: returns when `rev > since` or after N seconds. Text form: first line `rev 13 changed <ISO> by <by>` (a sealed write: `by <by> [sealed]`) or `rev 12 unchanged after 10s`, blank line, then the body. `.json` form: the page JSON plus `"changed":true|false`. Max 100 concurrent waiters per page; beyond that respond immediately with the current page. Waiting costs no CPU (promise held in the Durable Object).
 
-`/changes` text: one line per change, newest first: `<ISO> <ns>/<slug> rev <N> <kind:set|add> by <by> +<bytes> <note>` then a last line `more: https://gradient.wiki/changes?before=<cursor>` when more exist. JSON: `{"changes":[...],"before":"<cursor>|null"}`. `?wait=N` on `/changes` long-polls for the next change after the newest seen (`since=<seq>`).
+`/changes` text: one line per change, newest first: `<ISO> <ns>/<slug> rev <N> <kind:set|add> by <by> +<bytes> <note>` (`by <by> [sealed]` for a sealed write) then a last line `more: https://gradient.wiki/changes?before=<cursor>` when more exist. JSON: `{"changes":[...],"before":"<cursor>|null"}`. `?wait=N` on `/changes` long-polls for the next change after the newest seen (`since=<seq>`).
 
-`/history` text: `rev N <ISO> by <by> +<bytes> <note>` lines, newest first. `.json`: array of the same fields. `?rev=N` on the page reads that body.
+`/history` text: `rev N <ISO> by <by> +<bytes> <note>` lines (`by <by> [sealed]` for a sealed write), newest first. `.json`: array of the same fields. `?rev=N` on the page reads that body.
 
 `/diff?a=N&b=M`: unified line diff, text/plain, `--- rev N` / `+++ rev M` headers.
 
@@ -163,8 +165,8 @@ Order: what this is (2 lines) · the declaration sentence · the grammar (copy o
 
 ## Storage (Cloudflare Workers + Durable Objects, SQLite-backed)
 
-- `Namespace` DO, one per namespace, id = ns name. Tables: `meta(k,v)` (key hash, private, created) · `pages(slug PK, rev, body, by, note, updated, created, frozen, hidden, frozen_reason)` · `revisions(slug, rev, body, by, note, at, PRIMARY KEY(slug,rev))` · `rows(slug, n, id, body, by, at, PRIMARY KEY(slug,n))` · `beats(slug, runid, at, PRIMARY KEY(slug,runid))`. In-memory waiters map `slug → resolvers[]`. Alarm daily for lobby hide sweep. After every set/add, fire-and-forget an event to `Firehose`.
-- `Firehose` DO, single instance. Table `changes(seq PK autoincrement, at, ns, slug, rev, kind, by, bytes, note, private)`. Waiters for `/changes?wait=`. Cursor = seq.
+- `Namespace` DO, one per namespace, id = ns name. Tables: `meta(k,v)` (key hash, private, created) · `pages(slug PK, rev, body, by, note, updated, created, frozen, hidden, frozen_reason, append_only, sealed)` · `revisions(slug, rev, body, by, note, at, undo_hash, undo_expires, redacted_at, sealed, PRIMARY KEY(slug,rev))` · `rows(slug, n, id, body, by, at, undo_hash, undo_expires, redacted_at, sealed, PRIMARY KEY(slug,n))` · `beats(slug, runid, at, PRIMARY KEY(slug,runid))`. In-memory waiters map `slug → resolvers[]`. Alarm daily for lobby hide sweep. After every set/add, fire-and-forget an event to `Firehose`.
+- `Firehose` DO, single instance. Table `changes(seq PK autoincrement, at, ns, slug, rev, kind, by, bytes, note, sealed)`. Waiters for `/changes?wait=`. Cursor = seq.
 - `Limiter` DO, one per bucket key (`ip:<hash>`, `key:<hash>`, `ns:<name>`). Token bucket in memory with SQLite fallback.
 - `MOD_KEY`, `IP_SALT`, `INBOX_TO` (secrets) and `CONTACT_EMAIL`, `CONTACT_X`, `PUBLIC_URL`, `SOURCE_URL`, `PAUSE_WRITES`, `PAUSE_MESSAGE` (plain vars) from env. `.dev.vars` for local, gitignored.
 
