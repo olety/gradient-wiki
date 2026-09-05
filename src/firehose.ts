@@ -8,13 +8,17 @@ import type { Change, Env, LogEntry } from "./types";
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS changes (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, ns TEXT NOT NULL, slug TEXT NOT NULL,
-  rev INTEGER NOT NULL, kind TEXT NOT NULL, author TEXT NOT NULL, bytes INTEGER NOT NULL, note TEXT NOT NULL);
+  rev INTEGER NOT NULL, kind TEXT NOT NULL, author TEXT NOT NULL, bytes INTEGER NOT NULL, note TEXT NOT NULL,
+  sealed INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS changes_ns ON changes(ns, seq);
 CREATE INDEX IF NOT EXISTS changes_author ON changes(author, seq);
 CREATE TABLE IF NOT EXISTS log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, ns TEXT NOT NULL, slug TEXT NOT NULL,
   action TEXT NOT NULL, reason TEXT NOT NULL);
 `;
+
+// Columns added after the first schema; brings a pre-existing database up to date.
+const LATER_COLUMNS: Record<string, string> = { sealed: "INTEGER NOT NULL DEFAULT 0" };
 
 const MAX_WAITERS = 500;
 
@@ -28,6 +32,7 @@ type ChangeRec = {
   author: string;
   bytes: number;
   note: string;
+  sealed: number;
 };
 
 export class Firehose extends DurableObject<Env> {
@@ -35,7 +40,11 @@ export class Firehose extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => void this.sql.exec(SCHEMA));
+    ctx.blockConcurrencyWhile(async () => {
+      this.sql.exec(SCHEMA);
+      const have = new Set(this.sql.exec<{ name: string }>("PRAGMA table_info(changes)").toArray().map((r) => r.name));
+      for (const [col, decl] of Object.entries(LATER_COLUMNS)) if (!have.has(col)) this.sql.exec(`ALTER TABLE changes ADD COLUMN ${col} ${decl}`);
+    });
   }
 
   private get sql(): SqlStorage {
@@ -44,8 +53,8 @@ export class Firehose extends DurableObject<Env> {
 
   record(c: Omit<Change, "seq">): number {
     this.sql.exec(
-      "INSERT INTO changes (at, ns, slug, rev, kind, author, bytes, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      c.at, c.ns, c.slug, c.rev, c.kind, c.by, c.bytes, c.note);
+      "INSERT INTO changes (at, ns, slug, rev, kind, author, bytes, note, sealed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      c.at, c.ns, c.slug, c.rev, c.kind, c.by, c.bytes, c.note, c.sealed ? 1 : 0);
     const seq = this.sql.exec<{ seq: number }>("SELECT last_insert_rowid() AS seq").one().seq;
     for (const done of [...this.waiters]) done();
     return seq;
@@ -64,7 +73,7 @@ export class Firehose extends DurableObject<Env> {
       .toArray();
     const page = rows.slice(0, q.n);
     return {
-      changes: page.map((r) => ({ seq: r.seq, at: r.at, ns: r.ns, slug: r.slug, rev: r.rev, kind: r.kind, by: r.author, bytes: r.bytes, note: r.note })),
+      changes: page.map((r) => ({ seq: r.seq, at: r.at, ns: r.ns, slug: r.slug, rev: r.rev, kind: r.kind, by: r.author, bytes: r.bytes, note: r.note, sealed: r.sealed === 1 })),
       before: rows.length > q.n ? page[page.length - 1]!.seq : null,
     };
   }

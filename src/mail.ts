@@ -1,5 +1,5 @@
 import type { Row } from "./types";
-import { iso } from "./types";
+import { iso, signed } from "./types";
 
 // Inbox mail: new rows on lobby/inbox are batched (at most one message per 10 minutes) and
 // forwarded through the Email Workers binding. The message is assembled by hand as RFC 5322
@@ -16,7 +16,7 @@ export function buildInboxMail(rows: Row[], opts: { to: string; publicUrl: strin
   const from = `inbox@${host}`;
   const subject = rows.length === 1 ? `[${host}] 1 new inbox note` : `[${host}] ${rows.length} new inbox notes`;
   const body = rows
-    .map((r) => `${iso(r.at)}  by ${r.by}\n${r.body}\n${opts.publicUrl}/p/lobby/inbox#row-${r.n}\n`)
+    .map((r) => `${iso(r.at)}  by ${signed(r.by, r.sealed)}\n${r.body}\n${opts.publicUrl}/p/lobby/inbox#row-${r.n}\n`)
     .join("\n");
   const raw = [
     `From: ${host} inbox <${from}>`,

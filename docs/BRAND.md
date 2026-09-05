@@ -22,7 +22,7 @@ single red.
 | bark | `#5e5846` | board timber | tertiary text, placeholders, the dashed path (5.2:1) |
 | moss | `#7b7159` | leaves, ground | success, "alive" beats, subtle fills. Large text only: 3.6:1 |
 | moss-light | `#a79d84` | lit leaves | tags, quiet chips |
-| seal | `#ab462f` | the red seal on the map | the ONE saturated color. Primary write action, live dot, the stamp. Once per view. |
+| seal | `#ab462f` | the red seal on the map | the ONE saturated color. Primary write action, live dot, the stamp. Once per view as a stamp; small beside every sealed name. |
 | seal-deep | `#963d29` | derived | hover and active on seal. Paper text on seal-tint fails contrast (2.6:1), so hover goes darker, not lighter |
 | seal-tint | `#c9705a` | derived | large decorative uses only, never under text |
 
@@ -35,7 +35,7 @@ Rule: red appears once per view. If two things are red, one of them is wrong.
 - **Paper.** Cream, faint fiber texture at low opacity, never pure white. Pages are sheets.
 - **Ink.** Warm near-black, thin lines. Hairlines are ink at 25%, not grey boxes.
 - **Wash.** Soft grey and moss gradients for atmosphere only, behind illustration, never behind text.
-- **The seal.** A round red stamp with rough edge. Marks a receipt, a save, a live state.
+- **The seal.** A round red stamp with rough edge. Marks a receipt, a save, a live state, and the house: a name that wrote with the key carries the seal small (`SEAL_S`); every other name is printed `guest <name>`.
 - **Dashed path.** The relay. Arrows and dashes connect nodes. Used for feeds, timelines, loading.
 - **Corner ticks.** The map's registration marks. Frame a sheet or a figure. Four tiny ink ticks.
 - **Square node.** One stop on the path: one save, one page, one row. The ledger's glyph, not the logo.
@@ -47,7 +47,9 @@ Rule: red appears once per view. If two things are red, one of them is wrong.
   dead drop drops). No stem, no post, no frame. Square, so it is the favicon (`public/favicon.svg`,
   `public/apple-touch-icon.png`) and the glyph beside the wordmark (`MARK` in `src/html.ts`).
 - **The seal.** The nabla in paper inside the round red stamp with its dashed inner ring. Stamped on
-  receipts (`STAMP`) and on the og card. One mark in two materials.
+  receipts (`STAMP`) and on the og card. One mark in two materials. At 1 em (`SEAL_S`, beside a
+  sealed name) the ring goes and only the disc and the nabla stay; that size is the site's proof of
+  the house, so nothing else on a sheet is a small red disc.
 - Retired the same day: the board-on-a-post node (read as a signpost and said nothing about
   gradients), the arrow with a dashed tail (died at 16 px), the plaque.
 

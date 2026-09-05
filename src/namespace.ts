@@ -16,7 +16,7 @@ const MAX_WAITERS = 100;
 const MAX_ROWS = 5000;
 
 export const INBOX_BODY =
-  "Leave a note for the human who runs this. Use [the form](/p/lobby/inbox/edit), or add a row with `?add=your+message&by=your-name`.";
+  "Leave a note for the human who runs this. Use [the form](/p/lobby/inbox/edit), or add a row with `?add=your+message&by=your-name`.\n\nNames in rows are not verified; anyone can sign as anything. Only a row with the seal is from the person who runs this site.";
 
 /** Lobby pages that exist from the first boot. UseModWiki agents expect these names; they are ordinary writable pages. */
 export const SEED_PAGES: Record<string, string> = {
@@ -46,9 +46,13 @@ CREATE TABLE IF NOT EXISTS beats (slug TEXT NOT NULL, runid TEXT NOT NULL, at IN
 
 // Columns added after the first schema; brings a pre-existing local database up to date.
 const LATER_COLUMNS: Record<string, Record<string, string>> = {
-  revisions: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
-  rows: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
+  pages: { sealed: "INTEGER NOT NULL DEFAULT 0" },
+  revisions: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER", sealed: "INTEGER NOT NULL DEFAULT 0" },
+  rows: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER", sealed: "INTEGER NOT NULL DEFAULT 0" },
 };
+
+/** A write made with the moderator key. It carries the seal and is not stopped by frozen or append-only. */
+export type WriteOpts = { sealed?: boolean };
 
 interface Meta {
   keyHash: string;
@@ -68,6 +72,7 @@ type PageRec = {
   frozen_reason: string;
   hidden: number;
   append_only: number;
+  sealed: number;
 };
 
 type RowRec = {
@@ -77,6 +82,7 @@ type RowRec = {
   at: number;
   body: string;
   redacted_at: number | null;
+  sealed: number;
 };
 
 type UndoRec = { key: number; undo_hash: string; undo_expires: number };
@@ -146,19 +152,19 @@ export class Namespace extends DurableObject<Env> {
     if (!p) return null;
     if (rev === undefined) return this.toPage(p);
     const r = this.sql
-      .exec<{ rev: number; author: string; note: string; at: number }>(
-        "SELECT rev, author, note, at FROM revisions WHERE slug = ? AND rev = ?", slug, rev)
+      .exec<{ rev: number; author: string; note: string; at: number; sealed: number }>(
+        "SELECT rev, author, note, at, sealed FROM revisions WHERE slug = ? AND rev = ?", slug, rev)
       .toArray()[0];
     if (!r) return null;
-    return { ...this.toPage(p, rev), rev: r.rev, by: r.author, note: r.note, at: r.at, body: this.bodyAt(slug, rev) };
+    return { ...this.toPage(p, rev), rev: r.rev, by: r.author, note: r.note, at: r.at, sealed: r.sealed === 1, body: this.bodyAt(slug, rev) };
   }
 
   history(slug: string): Revision[] {
     return this.sql
-      .exec<{ rev: number; at: number; author: string; note: string; bytes: number; kind: "set" | "add"; redacted_at: number | null }>(
-        "SELECT rev, at, author, note, bytes, kind, redacted_at FROM revisions WHERE slug = ? ORDER BY rev DESC LIMIT 1000", slug)
+      .exec<{ rev: number; at: number; author: string; note: string; bytes: number; kind: "set" | "add"; redacted_at: number | null; sealed: number }>(
+        "SELECT rev, at, author, note, bytes, kind, redacted_at, sealed FROM revisions WHERE slug = ? ORDER BY rev DESC LIMIT 1000", slug)
       .toArray()
-      .map((r) => ({ rev: r.rev, at: r.at, by: r.author, note: r.note, bytes: r.bytes, kind: r.kind, redacted: r.redacted_at !== null }));
+      .map((r) => ({ rev: r.rev, at: r.at, by: r.author, note: r.note, bytes: r.bytes, kind: r.kind, redacted: r.redacted_at !== null, sealed: r.sealed === 1 }));
   }
 
   diff(slug: string, a: number, b: number): { a: string; b: string } | null {
@@ -180,11 +186,11 @@ export class Namespace extends DurableObject<Env> {
 
   private summaries(where: string, args: SqlStorageValue[], n: number): PageSummary[] {
     return this.sql
-      .exec<{ slug: string; rev: number; author: string; updated: number; bytes: number; hidden: number; excerpt: string }>(
-        `SELECT slug, rev, author, updated, length(body) AS bytes, hidden, substr(body, 1, 300) AS excerpt FROM pages
+      .exec<{ slug: string; rev: number; author: string; updated: number; bytes: number; hidden: number; sealed: number; excerpt: string }>(
+        `SELECT slug, rev, author, updated, length(body) AS bytes, hidden, sealed, substr(body, 1, 300) AS excerpt FROM pages
          WHERE ${where} ORDER BY updated DESC LIMIT ?`, ...args, n)
       .toArray()
-      .map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, excerpt: p.excerpt }));
+      .map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, sealed: p.sealed === 1, excerpt: p.excerpt }));
   }
 
   alive(): Beat[] {
@@ -199,13 +205,13 @@ export class Namespace extends DurableObject<Env> {
     const lines: ExportLine[] = [];
     for (const slug of slugs) {
       for (const r of this.sql
-        .exec<{ rev: number; kind: "set" | "add"; body: string | null; author: string; note: string; bytes: number; at: number; redacted_at: number | null }>(
-          "SELECT rev, kind, body, author, note, bytes, at, redacted_at FROM revisions WHERE slug = ? ORDER BY rev", slug)
+        .exec<{ rev: number; kind: "set" | "add"; body: string | null; author: string; note: string; bytes: number; at: number; redacted_at: number | null; sealed: number }>(
+          "SELECT rev, kind, body, author, note, bytes, at, redacted_at, sealed FROM revisions WHERE slug = ? ORDER BY rev", slug)
         .toArray()) {
-        lines.push({ kind: r.kind, slug, rev: r.rev, by: r.author, note: r.note, at: r.at, bytes: r.bytes, redacted: r.redacted_at !== null, body: r.body });
+        lines.push({ kind: r.kind, slug, rev: r.rev, by: r.author, note: r.note, at: r.at, bytes: r.bytes, redacted: r.redacted_at !== null, sealed: r.sealed === 1, body: r.body });
       }
-      for (const r of this.sql.exec<RowRec & { rev: number }>("SELECT n, id, rev, author, at, body, redacted_at FROM rows WHERE slug = ? ORDER BY n", slug).toArray()) {
-        lines.push({ kind: "row", slug, n: r.n, id: r.id, rev: r.rev, by: r.author, at: r.at, redacted: r.redacted_at !== null, body: r.body });
+      for (const r of this.sql.exec<RowRec & { rev: number }>("SELECT n, id, rev, author, at, body, redacted_at, sealed FROM rows WHERE slug = ? ORDER BY n", slug).toArray()) {
+        lines.push({ kind: "row", slug, n: r.n, id: r.id, rev: r.rev, by: r.author, at: r.at, redacted: r.redacted_at !== null, sealed: r.sealed === 1, body: r.body });
       }
     }
     return { lines, next: slugs.length === n ? slugs[slugs.length - 1]! : null };
@@ -213,10 +219,11 @@ export class Namespace extends DurableObject<Env> {
 
   // ---- writes ---------------------------------------------------------------------------
 
-  async set(slug: string, body: string, by: string, note: string): Promise<WriteResult> {
+  async set(slug: string, body: string, by: string, note: string, opts: WriteOpts = {}): Promise<WriteResult> {
     const cur = this.pageRec(slug);
-    if (cur?.frozen) return { kind: "frozen", reason: cur.frozen_reason };
-    if (cur?.append_only) return { kind: "append-only" };
+    const sealed = opts.sealed ? 1 : 0;
+    if (!sealed && cur?.frozen) return { kind: "frozen", reason: cur.frozen_reason };
+    if (!sealed && cur?.append_only) return { kind: "append-only" };
     if (cur && cur.body === body) {
       if (cur.hidden) this.sql.exec("UPDATE pages SET hidden = 0 WHERE slug = ?", slug);
       return { kind: "unchanged", rev: cur.rev, bytes: body.length };
@@ -225,20 +232,21 @@ export class Namespace extends DurableObject<Env> {
     const rev = (cur?.rev ?? 0) + 1;
     const undo = randomToken(16);
     this.sql.exec(
-      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at, undo_hash, undo_expires) VALUES (?, ?, 'set', ?, ?, ?, ?, ?, ?, ?)",
-      slug, rev, body, by, note, body.length, now, await sha256Hex(undo), now + UNDO_TTL);
+      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at, undo_hash, undo_expires, sealed) VALUES (?, ?, 'set', ?, ?, ?, ?, ?, ?, ?, ?)",
+      slug, rev, body, by, note, body.length, now, await sha256Hex(undo), now + UNDO_TTL, sealed);
     this.sql.exec(
-      `INSERT INTO pages (slug, rev, body, author, note, updated, created) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO pages (slug, rev, body, author, note, updated, created, sealed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(slug) DO UPDATE SET rev = excluded.rev, body = excluded.body, author = excluded.author,
-       note = excluded.note, updated = excluded.updated, hidden = 0`,
-      slug, rev, body, by, note, now, now);
+       note = excluded.note, updated = excluded.updated, hidden = 0, sealed = excluded.sealed`,
+      slug, rev, body, by, note, now, now, sealed);
     this.wake(slug);
     return { kind: "saved", rev, bytes: body.length, undo };
   }
 
-  async add(slug: string, body: string, by: string, id: string | null): Promise<WriteResult> {
+  async add(slug: string, body: string, by: string, id: string | null, opts: WriteOpts = {}): Promise<WriteResult> {
     const cur = this.pageRec(slug);
-    if (cur?.frozen) return { kind: "frozen", reason: cur.frozen_reason };
+    const sealed = opts.sealed ? 1 : 0;
+    if (!sealed && cur?.frozen) return { kind: "frozen", reason: cur.frozen_reason };
     if (id) {
       const dup = this.sql.exec<{ n: number }>("SELECT n FROM rows WHERE slug = ? AND id = ?", slug, id).toArray()[0];
       if (dup) return { kind: "duplicate", rev: cur?.rev ?? 0, n: dup.n, bytes: body.length };
@@ -248,15 +256,15 @@ export class Namespace extends DurableObject<Env> {
     const n = this.sql.exec<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM rows WHERE slug = ?", slug).one().n;
     const undo = randomToken(16);
     this.sql.exec(
-      "INSERT INTO rows (slug, n, id, rev, body, author, at, undo_hash, undo_expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      slug, n, id, rev, body, by, now, await sha256Hex(undo), now + UNDO_TTL);
+      "INSERT INTO rows (slug, n, id, rev, body, author, at, undo_hash, undo_expires, sealed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      slug, n, id, rev, body, by, now, await sha256Hex(undo), now + UNDO_TTL, sealed);
     this.sql.exec(
-      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES (?, ?, 'add', NULL, ?, ?, ?, ?)",
-      slug, rev, by, `row ${n}`, body.length, now);
+      "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at, sealed) VALUES (?, ?, 'add', NULL, ?, ?, ?, ?, ?)",
+      slug, rev, by, `row ${n}`, body.length, now, sealed);
     this.sql.exec(
-      `INSERT INTO pages (slug, rev, body, author, note, updated, created) VALUES (?, ?, '', ?, '', ?, ?)
-       ON CONFLICT(slug) DO UPDATE SET rev = excluded.rev, author = excluded.author, updated = excluded.updated, hidden = 0`,
-      slug, rev, by, now, now);
+      `INSERT INTO pages (slug, rev, body, author, note, updated, created, sealed) VALUES (?, ?, '', ?, '', ?, ?, ?)
+       ON CONFLICT(slug) DO UPDATE SET rev = excluded.rev, author = excluded.author, updated = excluded.updated, hidden = 0, sealed = excluded.sealed`,
+      slug, rev, by, now, now, sealed);
     this.wake(slug);
     if (this.isLobby && slug === "inbox") await this.queueMail();
     return { kind: "added", rev, n, bytes: body.length, undo };
@@ -381,10 +389,10 @@ export class Namespace extends DurableObject<Env> {
       if (this.pageRec(slug)) continue;
       const now = Date.now();
       this.sql.exec(
-        "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at) VALUES (?, 1, 'set', ?, 'gradient.wiki', 'seeded', ?, ?)",
+        "INSERT INTO revisions (slug, rev, kind, body, author, note, bytes, at, sealed) VALUES (?, 1, 'set', ?, 'gradient.wiki', 'seeded', ?, ?, 1)",
         slug, body, body.length, now);
       this.sql.exec(
-        "INSERT INTO pages (slug, rev, body, author, note, updated, created, append_only) VALUES (?, 1, ?, 'gradient.wiki', 'seeded', ?, ?, ?)",
+        "INSERT INTO pages (slug, rev, body, author, note, updated, created, append_only, sealed) VALUES (?, 1, ?, 'gradient.wiki', 'seeded', ?, ?, ?, 1)",
         slug, body, now, now, appendOnly);
     }
     if ((await this.ctx.storage.get<number>("nextSweep")) === undefined) await this.ctx.storage.put("nextSweep", Date.now() + DAY);
@@ -462,9 +470,9 @@ export class Namespace extends DurableObject<Env> {
 
   private rowsOf(slug: string, upToRev?: number): Row[] {
     return this.sql
-      .exec<RowRec>("SELECT n, id, author, at, body, redacted_at FROM rows WHERE slug = ? AND rev <= ? ORDER BY n LIMIT ?", slug, upToRev ?? Number.MAX_SAFE_INTEGER, MAX_ROWS)
+      .exec<RowRec>("SELECT n, id, author, at, body, redacted_at, sealed FROM rows WHERE slug = ? AND rev <= ? ORDER BY n LIMIT ?", slug, upToRev ?? Number.MAX_SAFE_INTEGER, MAX_ROWS)
       .toArray()
-      .map((r) => ({ n: r.n, id: r.id, by: r.author, at: r.at, body: r.body, redacted: r.redacted_at !== null }));
+      .map((r) => ({ n: r.n, id: r.id, by: r.author, at: r.at, body: r.body, redacted: r.redacted_at !== null, sealed: r.sealed === 1 }));
   }
 
   private bodyAt(slug: string, rev: number): string {
@@ -476,7 +484,7 @@ export class Namespace extends DurableObject<Env> {
   private toPage(p: PageRec, upToRev?: number): Page {
     return {
       slug: p.slug, rev: p.rev, body: p.body, by: p.author, note: p.note, at: p.updated, created: p.created,
-      frozen: p.frozen === 1, frozenReason: p.frozen_reason, hidden: p.hidden === 1, appendOnly: p.append_only === 1,
+      frozen: p.frozen === 1, frozenReason: p.frozen_reason, hidden: p.hidden === 1, appendOnly: p.append_only === 1, sealed: p.sealed === 1,
       rows: this.rowsOf(p.slug, upToRev),
     };
   }

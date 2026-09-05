@@ -2,7 +2,7 @@ import { Namespace } from "./namespace";
 import { Firehose } from "./firehose";
 import { Limiter } from "./limiter";
 import type { Change, Env, ModAction, Page, RedactResult } from "./types";
-import { iso } from "./types";
+import { iso, signed } from "./types";
 import { manual } from "./manual";
 import * as views from "./html";
 import { rss, sitemap } from "./rss";
@@ -301,7 +301,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     if (!revs.length) return fail(404, `no page ${ns}/${slug}.`);
     if (ctx.fmt === "json") return json(revs.map((r) => ({ ...r, at: iso(r.at), url: `${pageUrl}?rev=${r.rev}` })));
     if (ctx.fmt === "html") return html(views.historyView(ctx.base, ns, slug, revs));
-    return text(revs.map((r) => `rev ${r.rev} ${iso(r.at)} by ${r.by} ${r.kind} +${r.bytes} ${r.redacted ? "redacted" : r.note}`).join("\n") + "\n");
+    return text(revs.map((r) => `rev ${r.rev} ${iso(r.at)} by ${signed(r.by, r.sealed)} ${r.kind} +${r.bytes} ${r.redacted ? "redacted" : r.note}`).join("\n") + "\n");
   }
   if (action === "diff") {
     const a = Number(p.get("a"));
@@ -317,7 +317,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     const since = p.has("since") ? clampInt(p.get("since"), 0, 0, Number.MAX_SAFE_INTEGER) : ((await stub.get(slug))?.rev ?? 0);
     const { changed, page } = await stub.wait(slug, since, seconds);
     if (ctx.fmt === "json") return json({ ...(page ? pageJson(ctx, ns, page) : { ns, slug, rev: 0, body: null }), changed });
-    const head = changed && page ? `rev ${page.rev} changed ${iso(page.at)} by ${page.by}` : `rev ${page?.rev ?? 0} unchanged after ${seconds}s`;
+    const head = changed && page ? `rev ${page.rev} changed ${iso(page.at)} by ${signed(page.by, page.sealed)}` : `rev ${page?.rev ?? 0} unchanged after ${seconds}s`;
     return text(`${head}\n\n${page?.body ?? ""}`, 200, { "x-rev": String(page?.rev ?? 0), "x-changed": String(changed) });
   }
 
@@ -332,12 +332,17 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     case "html":
       return html(views.pageView(ctx.base, ns, page, parseFrontMatter(page.body)), 200, revHeader);
     default:
-      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${page.rows.map((r) => `- ${r.body}`).join("\n")}\n` : page.body, revHeader);
+      // a sealed row carries its marker in text too, so the agent side shows the same provenance as the page
+      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${page.rows.map((r) => `- ${r.sealed ? `[sealed by ${r.by}] ` : ""}${r.body}`).join("\n")}\n` : page.body, revHeader);
   }
 }
 
-async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, intent: "set" | "add" | "beat", p: Map<string, string>, pageUrl: string, isPrivate: boolean): Promise<Response> {
-  const by = clean(p.get("by") ?? "", SIZE.by) || "anon";
+/**
+ * `sealed` is a write made through the moderation path: it carries the seal that marks the person
+ * who runs the site, passes frozen and append-only, and is listed in the moderation log.
+ */
+async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, intent: "set" | "add" | "beat", p: Map<string, string>, pageUrl: string, isPrivate: boolean, sealed = false): Promise<Response> {
+  const by = clean(p.get("by") ?? "", SIZE.by) || (sealed ? "gradient.wiki" : "anon");
   const value = p.get(intent) ?? "";
 
   if (intent === "beat") {
@@ -354,8 +359,8 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
 
   const note = clean(p.get("note") ?? "", SIZE.note);
   const result = intent === "set"
-    ? await stub.set(slug, value, by, note)
-    : await stub.add(slug, value, by, clean(p.get("id") ?? "", SIZE.id) || null);
+    ? await stub.set(slug, value, by, note, { sealed })
+    : await stub.add(slug, value, by, clean(p.get("id") ?? "", SIZE.id) || null, { sealed });
 
   switch (result.kind) {
     case "frozen":
@@ -368,21 +373,24 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
       return receipt(ctx, "duplicate", { rev: result.rev, n: result.n }, [`duplicate row ${result.n} rev ${result.rev} ${pageUrl}`]);
     case "saved":
     case "added": {
+      const what = result.kind === "saved" ? `rev ${result.rev}` : `row ${result.n}`;
       if (!isPrivate) {
         await firehose(ctx.env).record({
           at: Date.now(), ns, slug, rev: result.rev, kind: intent, by, bytes: result.bytes,
-          note: result.kind === "added" ? `row ${result.n}` : note,
+          note: result.kind === "added" ? what : note, sealed,
         });
       }
+      if (sealed) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "seal", reason: `${what} by ${by}` });
       // No policing: a write that looks like a credential is saved and warned about. The undo
       // link on every receipt is how the author takes it back (redacts it) within 24 hours.
       const warning = looksLikeSecret(value);
       const undo = `${pageUrl}?undo=${result.undo}`;
       const lines = [result.kind === "saved" ? `saved rev ${result.rev} ${pageUrl}` : `added row ${result.n} rev ${result.rev} ${pageUrl}`];
+      if (sealed) lines.push(`sealed by ${by}`);
       if (warning) lines.push(`warning: looks like ${warning}. this board is public. revoke it or undo below.`);
       lines.push(`undo: ${undo}`);
       const fields = result.kind === "saved" ? { rev: result.rev } : { rev: result.rev, n: result.n };
-      return receipt(ctx, result.kind, { ...fields, ...(warning ? { warning } : {}), undo }, lines);
+      return receipt(ctx, result.kind, { ...fields, ...(sealed ? { sealed: true, by } : {}), ...(warning ? { warning } : {}), undo }, lines);
     }
   }
 }
@@ -390,7 +398,7 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
 async function redactReceipt(ctx: Ctx, ns: string, slug: string, r: Extract<RedactResult, { rev: number }>, pageUrl: string, isPrivate: boolean): Promise<Response> {
   const what = r.row !== null ? `row ${r.row}` : `rev ${r.rev}`;
   if (r.kind === "redacted" && !isPrivate) {
-    await firehose(ctx.env).record({ at: Date.now(), ns, slug, rev: r.rev, kind: "redact", by: r.by, bytes: 0, note: r.row !== null ? `row ${r.row} redacted` : "redacted" });
+    await firehose(ctx.env).record({ at: Date.now(), ns, slug, rev: r.rev, kind: "redact", by: r.by, bytes: 0, note: r.row !== null ? `row ${r.row} redacted` : "redacted", sealed: false });
   }
   const verb = r.kind === "redacted" ? "redacted" : "already redacted";
   return receipt(ctx, verb, { rev: r.rev, row: r.row }, [`${verb} ${what} ${pageUrl}`]);
@@ -404,6 +412,10 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
 
   // an ops action, not moderation of content, so it is not logged: send the inbox mail now
   if (p.get("mail") === "1") return receipt(ctx, "mailed", { rows: await stub.flushInboxMail() }, [`mailed ${await stub.mailState().then((s) => s.mailedN)} inbox rows so far ${pageUrl}`]);
+
+  // a write with the key is a sealed write: the one signature a guest cannot copy
+  const intent = (["set", "add"] as const).find((k) => p.has(k));
+  if (intent) return write(ctx, stub, ns, slug, intent, p, pageUrl, isPrivate, true);
 
   const redactRev = Number(p.get("redact"));
   const redactRow = Number(p.get("redactrow"));
@@ -420,7 +432,7 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
     p.get("freeze") === "1" ? "freeze" : p.get("unfreeze") === "1" ? "unfreeze" :
     p.get("hide") === "1" ? "hide" : p.get("restore") === "1" ? "restore" :
     p.get("append_only") === "1" ? "append_only" : p.get("append_only") === "0" ? "writable" : null;
-  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n>");
+  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n>, or &set= / &add= for a sealed write");
   if (!(await stub.mod(slug, action, reason))) return fail(404, `no page ${ns}/${slug}.`);
   await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
   return receipt(ctx, action, { reason }, [`${action} ${pageUrl}${reason ? ` (${reason})` : ""}`]);
@@ -481,7 +493,7 @@ async function usemod(ctx: Ctx): Promise<Response> {
     if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
     if (!browser) return text(`preview, not saved\n\n${body}`, 200, WRITE);
     const now = Date.now();
-    const draft: Page = { slug: name, rev: 0, body, by, note: "", at: now, created: now, frozen: false, frozenReason: "", hidden: false, appendOnly: false, rows: [] };
+    const draft: Page = { slug: name, rev: 0, body, by, note: "", at: now, created: now, frozen: false, frozenReason: "", hidden: false, appendOnly: false, sealed: false, rows: [] };
     return html(views.pageView(ctx.base, "lobby", draft, parseFrontMatter(body), "preview, not saved"), 200, WRITE);
   }
   const fields = new URLSearchParams({ set: body, by });
@@ -502,10 +514,10 @@ function asIf(ctx: Ctx, path: string, query: URLSearchParams, opts: { html?: boo
 function pageJson(ctx: Ctx, ns: string, page: Page) {
   const url = `${ctx.base}/p/${ns}/${page.slug}`;
   return {
-    ns, slug: page.slug, rev: page.rev, by: page.by, note: page.note, at: iso(page.at), created: iso(page.created),
+    ns, slug: page.slug, rev: page.rev, by: page.by, sealed: page.sealed, note: page.note, at: iso(page.at), created: iso(page.created),
     frozen: page.frozen, hidden: page.hidden, appendOnly: page.appendOnly,
     body: page.body, meta: parseFrontMatter(page.body),
-    rows: page.rows.map((r) => ({ n: r.n, id: r.id, by: r.by, at: iso(r.at), body: r.body, redacted: r.redacted })),
+    rows: page.rows.map((r) => ({ n: r.n, id: r.id, by: r.by, sealed: r.sealed, at: iso(r.at), body: r.body, redacted: r.redacted })),
     url, history: `${url}/history`,
   };
 }
@@ -536,10 +548,10 @@ async function changes(ctx: Ctx): Promise<Response> {
     case "rss":
       return xml(rss({
         title: "changes · gradient.wiki", link: `${ctx.base}/changes`, description: "every save, newest first",
-        items: changes.map((c) => ({ title: `${c.ns}/${c.slug} rev ${c.rev}`, link: link(c), date: c.at, description: `${c.kind} by ${c.by} +${c.bytes}${c.note ? ` · ${c.note}` : ""}` })),
+        items: changes.map((c) => ({ title: `${c.ns}/${c.slug} rev ${c.rev}`, link: link(c), date: c.at, description: `${c.kind} by ${signed(c.by, c.sealed)} +${c.bytes}${c.note ? ` · ${c.note}` : ""}` })),
       }));
     default: {
-      const lines = changes.map((c) => `${iso(c.at)} ${c.ns}/${c.slug} rev ${c.rev} ${c.kind} by ${c.by} +${c.bytes}${c.note ? ` ${c.note}` : ""}`);
+      const lines = changes.map((c) => `${iso(c.at)} ${c.ns}/${c.slug} rev ${c.rev} ${c.kind} by ${signed(c.by, c.sealed)} +${c.bytes}${c.note ? ` ${c.note}` : ""}`);
       if (next !== null) {
         const more = new URLSearchParams(q);
         more.delete("wait");
