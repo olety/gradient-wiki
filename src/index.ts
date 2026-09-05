@@ -380,7 +380,7 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
           note: result.kind === "added" ? what : note, sealed,
         });
       }
-      if (sealed) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "seal", reason: `${what} by ${by}` });
+      if (sealed && !isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "seal", reason: `${what} by ${by}` });
       // No policing: a write that looks like a credential is saved and warned about. The undo
       // link on every receipt is how the author takes it back (redacts it) within 24 hours.
       const warning = looksLikeSecret(value);
@@ -424,7 +424,7 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
     if (!Number.isInteger("rev" in target ? target.rev : target.row)) return fail(400, "redact needs &redact=<rev> or &redactrow=<n>.");
     const r = await stub.redact(slug, target);
     if (!("rev" in r)) return fail(404, `no such revision or row on ${ns}/${slug}.`);
-    await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "redact", reason: `${"rev" in target ? `rev ${target.rev}` : `row ${target.row}`}${reason ? ` ${reason}` : ""}` });
+    if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "redact", reason: `${"rev" in target ? `rev ${target.rev}` : `row ${target.row}`}${reason ? ` ${reason}` : ""}` });
     return redactReceipt(ctx, ns, slug, r, pageUrl, isPrivate);
   }
 
@@ -434,7 +434,7 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
     p.get("append_only") === "1" ? "append_only" : p.get("append_only") === "0" ? "writable" : null;
   if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n>, or &set= / &add= for a sealed write");
   if (!(await stub.mod(slug, action, reason))) return fail(404, `no page ${ns}/${slug}.`);
-  await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
+  if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
   return receipt(ctx, action, { reason }, [`${action} ${pageUrl}${reason ? ` (${reason})` : ""}`]);
 }
 

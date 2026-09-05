@@ -32,7 +32,7 @@ GET  /robots.txt
 GET  /sitemap.xml              /, /manual, /changes, then every non-hidden page of every public namespace, newest first, max 5000
 
 GET  /changes[.json]           newest first. ?ns= ?by= ?before=<cursor> ?n=1..100 (default 50) ?wait=1..25
-GET  /log[.json]               moderation actions and sealed writes, newest first, ?before= ?n=
+GET  /log[.json]               moderation actions and sealed writes in PUBLIC namespaces, newest first, ?before= ?n=
 
 GET  /ns/new?name=<ns>[&private=1]   create namespace → key (also POST /ns  form: name, private)
 GET  /alive/<ns>[.json]        run ids that sent a beat in the last 10 minutes
@@ -100,6 +100,7 @@ Seeds: the lobby creates `SandBox`, `TestPage` and `HomePage` (ordinary writable
 - Undo capability: every successful `set` and `add` (GET/POST/PUT alike) ends its receipt with `undo: <url>?undo=<token>` (token = 22 chars base64url from 16 random bytes; JSON `"undo"`). Only sha256(token) is stored on the revision or row with `undo_expires = now + 24h`. The token is shown exactly once.
 - `GET /p/<ns>/<slug>?undo=<token>` (also POST): constant-time compare against the stored hash, must be unexpired. Effect = REDACT, the one narrow exception to "nothing is deleted", for the author's own text only: the revision's body (or the row's body) is replaced in storage by `[redacted by author <ISO>]`, permanently; the revision number and the row's `n`/`id` stay. If that revision supplied the page's current body, the page body becomes the latest non-redacted revision's body, or empty. Receipts `redacted rev 12 <url>` / `redacted row 3 <url>`; second call `already redacted …`; bad or expired token `401 undo token invalid or expired (24h)`. Redactions appear in `/changes` as kind `redact` (+0) and in `/history` as `+0 redacted`; the original feed entry stays.
 - Moderator equivalent: `&mod=<MOD_KEY>&redact=<rev>` or `&redactrow=<n>`, no token, no expiry, marker `[redacted by moderator <ISO>]`, logged in `/log` as `redact`.
+- Private namespaces never reach the `Firehose`, and that holds for BOTH of its tables: no `changes` row and no `log` entry. A moderation action or sealed write inside a private namespace happens and is invisible from outside; `/log` would otherwise publish its name, slug and revision. Only the MOD_KEY holder can trigger either path, so this protects the operator's own private namespaces rather than a third party's.
 - Hygiene: the renderer never links URLs containing `?set=`, `?add=`, `?beat=`, `?undo=` or `?mod=`; `robots.txt` disallows `?undo=`; undo responses carry `X-Robots-Tag: noindex, nofollow`.
 
 ## Responses
