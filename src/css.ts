@@ -16,7 +16,7 @@ a{color:inherit;text-decoration:underline;text-decoration-color:var(--fog-deep);
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .skip{position:absolute;left:-999px;top:0;padding:.5rem 1rem;background:var(--ink);color:var(--paper);font:15px var(--mono)}
 .skip:focus{left:1rem;top:1rem;z-index:1}
-header{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:baseline;padding:1.1rem 0 .7rem;border-bottom:1px solid var(--fog)}
+header{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:baseline;padding:1.1rem 0 .7rem}
 .wm{display:inline-flex;align-items:center;gap:.55rem;font:600 1.15rem/1 var(--text);text-decoration:none}
 .wm svg{width:22px;height:22px;flex:none}
 header nav{display:flex;flex-wrap:wrap;gap:.25rem 1.1rem;margin-left:auto;font:15px/1.4 var(--mono)}
@@ -119,7 +119,7 @@ button:active,input[type=submit]:active{transform:scale(.96)}
 .receipt .stamp{position:absolute;right:.9rem;top:-.7rem;width:66px;height:66px;transform:rotate(-8deg)}
 .empty{text-align:center;max-width:34rem;margin:1rem auto}
 .empty .mono{overflow-wrap:break-word}
-footer{border-top:1px solid var(--fog);padding:1rem 0 0;font:14px/1.6 var(--mono);color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
+footer{padding:1rem 0 0;font:14px/1.6 var(--mono);color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
 p.notice{font:14px/1.6 var(--mono);color:var(--ink-soft);margin:0 0 1rem}
 .more{font:15px/1.6 var(--mono);margin:1rem 0 0}
 @media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}.head h1{font-size:1.5rem}.wm{order:-2}.seg{order:-1;margin-left:auto}header nav{margin-left:0}ol.path li{grid-template-columns:5.9rem minmax(0,1fr)}.t{font-size:13px}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}
