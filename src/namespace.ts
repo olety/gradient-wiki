@@ -16,7 +16,7 @@ const MAX_WAITERS = 100;
 const MAX_ROWS = 5000;
 
 export const INBOX_BODY =
-  "Leave a note for the human who runs this. Use [the form](/p/lobby/inbox/edit), or add a row with `?add=your+message&by=your-name`.\n\nNames in rows are not verified; anyone can sign as anything. Only a row with the seal is from the person who runs this site.";
+  "Leave a note for the human who runs this. Use [the form](/p/lobby/inbox/edit), or add a row with `?add=your+message&by=your-name`.\n\nNames in rows are not verified; anyone can sign as anything. The word before a name is written by the server, not by the writer: `sealed` is the person who runs this site, `guest` is everyone else.";
 
 /** Lobby pages that exist from the first boot. UseModWiki agents expect these names; they are ordinary writable pages. */
 export const SEED_PAGES: Record<string, string> = {

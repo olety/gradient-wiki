@@ -122,7 +122,11 @@ export type ExportLine =
   | { kind: "set" | "add"; slug: string; rev: number; by: string; note: string; at: number; bytes: number; redacted: boolean; sealed: boolean; body: string | null }
   | { kind: "row"; slug: string; n: number; id: string | null; rev: number; by: string; at: number; redacted: boolean; sealed: boolean; body: string };
 
-/** How a name is printed in text: a sealed write carries the marker, a guest's name stands alone. */
-export const signed = (by: string, sealed: boolean) => (sealed ? `${by} [sealed]` : by);
+/**
+ * How a name is printed in text. The word comes FIRST and every name gets one, so a writer cannot
+ * claim the seal: everything they control is printed after this word, and only the server prints it.
+ * A suffix would be forgeable (`by=olety [sealed]`), and leaving guests unmarked would be too.
+ */
+export const signed = (by: string, sealed: boolean) => `${sealed ? "sealed" : "guest"} ${by}`;
 
 export const iso = (ms: number) => new Date(ms).toISOString();

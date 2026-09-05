@@ -162,11 +162,11 @@ describe("pages", () => {
     await receipt(`/p/lobby/${slug}?add=row+one&by=w1`, `added row 1 rev 1 ${u}`);
     await receipt(`/p/lobby/${slug}?add=row+two&id=r2`, `added row 2 rev 2 ${u}`);
     expect(await text(`/p/lobby/${slug}?add=row+two+again&id=r2`)).toBe(`duplicate row 2 rev 2 ${u}\n`);
-    expect(await text(`/p/lobby/${slug}`)).toBe("\n\n## rows\n- row one\n- row two\n");
+    expect(await text(`/p/lobby/${slug}`)).toBe("\n\n## rows\n- guest w1: row one\n- guest anon: row two\n");
     const j = await json<{ rows: Array<{ n: number; id: string | null; body: string; redacted: boolean }> }>(`/p/lobby/${slug}.json`);
     expect(j.rows.map((r) => [r.n, r.id, r.body, r.redacted])).toEqual([[1, null, "row one", false], [2, "r2", "row two", false]]);
     await get(`/p/lobby/${slug}?set=a+heading`);
-    expect(await text(`/p/lobby/${slug}`)).toBe("a heading\n\n## rows\n- row one\n- row two\n");
+    expect(await text(`/p/lobby/${slug}`)).toBe("a heading\n\n## rows\n- guest w1: row one\n- guest anon: row two\n");
   });
 
   it("accepts PUT and POST for shell agents", async () => {
@@ -180,7 +180,7 @@ describe("pages", () => {
     expect((await get(`/p/lobby/${tag}/big`, { method: "PUT", body: "x".repeat(20_000) })).status).toBe(200);
     expect((await get(`/p/lobby/${tag}/big?set=${"y".repeat(17_000)}`)).status).toBe(413);
     expect(await text(`/p/lobby/${slug}.json`)).toContain('"by": "anon"');
-    expect(await text(`/p/lobby/${slug}/history`)).toContain("by former set +9");
+    expect(await text(`/p/lobby/${slug}/history`)).toContain("by guest former set +9");
   });
 
   it("validates slugs and namespace names", async () => {
@@ -223,9 +223,9 @@ describe("pages", () => {
     await get(`/p/lobby/${slug}`, { method: "PUT", body: "a\nB\nc\nd", headers: { "x-note": "caps" } });
     await get(`/p/lobby/${slug}?add=row`);
     const hist = await text(`/p/lobby/${slug}/history`);
-    expect(hist).toMatch(/^rev 3 \S+ by anon add \+3 row 1\nrev 2 \S+ by anon set \+7 caps\nrev 1 \S+ by anon set \+5 \n$/);
+    expect(hist).toMatch(/^rev 3 \S+ by guest anon add \+3 row 1\nrev 2 \S+ by guest anon set \+7 caps\nrev 1 \S+ by guest anon set \+5 \n$/);
     expect(await text(`/p/lobby/${slug}/diff?a=1&b=2`)).toBe("--- rev 1\n+++ rev 2\n@@ -1,3 +1,4 @@\n a\n-b\n+B\n c\n+d\n");
-    expect(await text(`/p/lobby/${slug}?rev=3`)).toBe("a\nB\nc\nd\n\n## rows\n- row\n");
+    expect(await text(`/p/lobby/${slug}?rev=3`)).toBe("a\nB\nc\nd\n\n## rows\n- guest anon: row\n");
     expect(await text(`/p/lobby/${slug}?rev=1`)).toBe("a\nb\nc");
     expect((await get(`/p/lobby/${slug}/diff?a=1&b=7`)).status).toBe(404);
     expect(await (await get(`/p/lobby/${slug}/history.html`)).text()).toContain(`/p/lobby/${slug}/diff?a=2&amp;b=3`);
@@ -247,11 +247,11 @@ describe("undo", () => {
     expect(await text(`/p/lobby/${slug}`)).toBe("v1");
     expect(await text(`/p/lobby/${slug}?rev=2`)).toMatch(/^\[redacted by author \S+\]$/);
     expect(await text(`/p/lobby/${slug}?rev=1`)).toBe("v1");
-    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by me set \+0 redacted\nrev 1 /);
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by guest me set \+0 redacted\nrev 1 /);
     expect(await text(`/p/lobby/${slug}/history.html`)).toContain("<em>redacted</em>");
     const feed = await text(`/changes?ns=lobby&by=me`);
-    expect(feed.split("\n")[0]).toMatch(new RegExp(`lobby/${slug} rev 2 redact by me \\+0 redacted$`));
-    expect(feed).toContain(`lobby/${slug} rev 2 set by me +9`);
+    expect(feed.split("\n")[0]).toMatch(new RegExp(`lobby/${slug} rev 2 redact by guest me \\+0 redacted$`));
+    expect(feed).toContain(`lobby/${slug} rev 2 set by guest me +9`);
     expect(await text(undoPath)).toBe(`already redacted rev 2 ${u}\n`);
     expect(await text(`/p/lobby/${slug}.json?rev=2`)).toContain('"rev": 2');
   });
@@ -269,7 +269,7 @@ describe("undo", () => {
     expect(j.rows[0]).toMatchObject({ n: 1, id: "k1", body: "keep me", redacted: false });
     expect(j.rows[1]).toMatchObject({ n: 2, id: "k2", redacted: true });
     expect(j.rows[1]!.body).toMatch(/^\[redacted by author \S+\]$/);
-    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by anon add \+0 redacted\n/);
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 2 \S+ by guest anon add \+0 redacted\n/);
     expect(await text(`/p/lobby/${slug}?add=oops+again&id=k2`)).toBe(`duplicate row 2 rev 2 ${u}\n`);
     expect(await text(undoPath)).toBe(`already redacted row 2 ${u}\n`);
     expect(await text(`/p/lobby/${slug}.html`)).toContain('class="redacted"');
@@ -298,10 +298,10 @@ describe("undo", () => {
     await get(`/p/lobby/${slug}?add=a+row`);
     expect((await get(`/p/lobby/${slug}?mod=wrong&redact=2`)).status).toBe(403);
     expect(await text(`/p/lobby/${slug}?mod=test-mod-key&redact=2&reason=leak`)).toBe(`redacted rev 2 ${u}\n`);
-    expect(await text(`/p/lobby/${slug}`)).toBe("first\n\n## rows\n- a row\n");
+    expect(await text(`/p/lobby/${slug}`)).toBe("first\n\n## rows\n- guest anon: a row\n");
     expect(await text(`/p/lobby/${slug}?rev=2`)).toMatch(/^\[redacted by moderator \S+\]/);
     expect(await text(`/p/lobby/${slug}?mod=test-mod-key&redactrow=1`)).toBe(`redacted row 1 ${u}\n`);
-    expect(await text(`/p/lobby/${slug}`)).toMatch(/^first\n\n## rows\n- \[redacted by moderator \S+\]\n$/);
+    expect(await text(`/p/lobby/${slug}`)).toMatch(/^first\n\n## rows\n- guest anon: \[redacted by moderator \S+\]\n$/);
     expect((await get(`/p/lobby/${slug}?mod=test-mod-key&redact=9`)).status).toBe(404);
     const log = (await text("/log")).split("\n").filter((l) => l.includes(slug));
     expect(log.map((l) => l.split(" ").slice(1).join(" "))).toEqual([`lobby/${slug} redact row 1`, `lobby/${slug} redact rev 2 leak`]);
@@ -326,7 +326,7 @@ describe("wait", () => {
     await get(`/p/lobby/${tag}/w?set=v2&by=writer`);
     const res = await waiting;
     expect(res.headers.get("x-changed")).toBe("true");
-    expect(await res.text()).toMatch(/^rev 2 changed \S+ by writer\n\nv2$/);
+    expect(await res.text()).toMatch(/^rev 2 changed \S+ by guest writer\n\nv2$/);
   });
 
   it("wakes on add and returns at once when since is behind", async () => {
@@ -355,9 +355,9 @@ describe("changes feed", () => {
     await get(`/p/team-${tag}/c2?set=two&key=${key}`);
     await get(`/p/lobby/${tag}/c1?add=three&by=${tag}-y`);
     const lines = (await text("/changes")).trim().split("\n");
-    expect(lines[0]).toMatch(new RegExp(`lobby/${tag}/c1 rev 2 add by ${tag}-y \\+5 row 1$`));
-    expect(lines[1]).toMatch(new RegExp(`team-${tag}/c2 rev 1 set by anon \\+3$`));
-    expect(lines[2]).toMatch(new RegExp(`lobby/${tag}/c1 rev 1 set by ${tag}-x \\+3$`));
+    expect(lines[0]).toMatch(new RegExp(`lobby/${tag}/c1 rev 2 add by guest ${tag}-y \\+5 row 1$`));
+    expect(lines[1]).toMatch(new RegExp(`team-${tag}/c2 rev 1 set by guest anon \\+3$`));
+    expect(lines[2]).toMatch(new RegExp(`lobby/${tag}/c1 rev 1 set by guest ${tag}-x \\+3$`));
     const page = await json<{ changes: Array<{ seq: number }>; before: number }>("/changes.json?n=2");
     expect(page.changes).toHaveLength(2);
     const rest = await json<{ changes: Array<{ ns: string; slug: string }> }>(`/changes.json?n=1&before=${page.before}`);
@@ -430,8 +430,8 @@ describe("namespaces", () => {
     await get(`/p/${name}/new?set=second&key=${key}`);
     const lines = (await text(`/p/${name}`)).trim().split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/^new rev 1 \S+ by anon \+6$/);
-    expect(lines[1]).toMatch(/^old rev 1 \S+ by anon \+15$/);
+    expect(lines[0]).toMatch(/^new rev 1 \S+ by guest anon \+6$/);
+    expect(lines[1]).toMatch(/^old rev 1 \S+ by guest anon \+15$/);
     await get(`/p/${name}/old?mod=test-mod-key&hide=1`);
     expect(await text(`/p/${name}`)).not.toContain("old rev");
     expect(await text(`/p/${name}?all=1`)).toContain("old rev 1 ");
@@ -505,7 +505,7 @@ describe("inbox", () => {
     expect(await json<{ appendOnly: boolean; by: string }>("/p/lobby/inbox.json")).toMatchObject({ appendOnly: true, by: "gradient.wiki" });
     expect((await get("/p/lobby/inbox?set=vandal")).status).toBe(423);
     expect(await text(`/p/lobby/inbox?add=hi+human&by=${tag}`)).toMatch(new RegExp(`^added row \\d+ rev \\d+ ${B}/p/lobby/inbox\\nundo: `));
-    expect(await text("/p/lobby/inbox")).toContain("- hi human");
+    expect(await text("/p/lobby/inbox")).toContain(`- guest ${tag}: hi human`);
   });
 
   it("queues and flushes a batched mail to INBOX_TO", async () => {
@@ -681,7 +681,7 @@ describe("usemod dialect", () => {
     const { get, text, tag } = client();
     await get(`/wiki.pl?action=edit&id=${tag}/RcPage&text=rc+me&username=rc-agent`);
     for (const q of ["RecentChanges", "id=RecentChanges", "action=rc", "action=browse&id=RecentChanges"]) {
-      expect((await text(`/wiki.cgi?${q}`)).split("\n")[0]).toMatch(new RegExp(`lobby/${tag}/RcPage rev 1 set by rc-agent \\+5$`));
+      expect((await text(`/wiki.cgi?${q}`)).split("\n")[0]).toMatch(new RegExp(`lobby/${tag}/RcPage rev 1 set by guest rc-agent \\+5$`));
     }
     const one = (await text("/wiki.pl?action=rc&n=1&days=7")).trim().split("\n");
     expect(one.filter((l) => !l.startsWith("more: "))).toHaveLength(1);
@@ -741,7 +741,7 @@ describe("usemod dialect", () => {
     const form = (body: string) => new URLSearchParams({ action: "edit", id: name, text: body, summary: "via form", username: "form-agent", oldtime: "0", Save: "Save" });
     await receipt("/wiki.pl", `saved rev 1 ${u}`, { method: "POST", body: form("posted body") });
     expect(await text(`/p/lobby/${name}`)).toBe("posted body");
-    expect(await text(`/p/lobby/${name}/history`)).toContain("by form-agent set +11 via form");
+    expect(await text(`/p/lobby/${name}/history`)).toContain("by guest form-agent set +11 via form");
     const big = await get(`/wiki.cgi?action=edit&id=${name}`, { method: "POST", body: new URLSearchParams({ text: "x".repeat(20_000) }) });
     expect(big.status).toBe(200);
     expect(await big.text()).toMatch(new RegExp(`^saved rev 2 ${u}\n`));
@@ -766,7 +766,7 @@ describe("usemod dialect", () => {
     const form = new URLSearchParams({ title: name, oldtime: "2", text: "third\nline", summary: "form", username: "browser-agent", Save: "Save" });
     await receipt("/wiki.pl", `saved rev 3 ${u}`, { method: "POST", body: form });
     expect(await text(`/p/lobby/${name}`)).toBe("third\nline");
-    expect(await text(`/p/lobby/${name}/history`)).toContain("by browser-agent set +10 form");
+    expect(await text(`/p/lobby/${name}/history`)).toContain("by guest browser-agent set +10 form");
     expect(await text(`/wiki.pl?title=${name}&oldtime=3&text=third%0Aline&Save=Save`)).toBe(`unchanged rev 3 ${u}\n`);
     expect((await get("/wiki.pl?title=Bad%20Name&oldtime=1&text=x&Save=Save")).status).toBe(400);
     expect((await get(`/wiki.pl?title=${name}&oldtime=1&Save=Save`)).status).toBe(400);
@@ -796,7 +796,7 @@ describe("usemod dialect", () => {
     const name = `${tag}/HistPage`;
     await get(`/wiki.pl?action=edit&id=${name}&text=v1&username=h-agent`);
     await get(`/wiki.pl?action=edit&id=${name}&text=v2&summary=second`);
-    expect(await text(`/wiki.pl?action=history&id=${name}`)).toMatch(/^rev 2 \S+ by anon set \+2 second\nrev 1 \S+ by h-agent set \+2 \n$/);
+    expect(await text(`/wiki.pl?action=history&id=${name}`)).toMatch(/^rev 2 \S+ by guest anon set \+2 second\nrev 1 \S+ by guest h-agent set \+2 \n$/);
     expect(await (await get(`/wiki.pl?action=history&id=${name}`, { headers: { accept: "text/html" } })).text()).toContain(`/p/lobby/${name}/diff?a=1&amp;b=2`);
     expect((await get(`/wiki.pl?action=history&id=${tag}/Nowhere`)).status).toBe(404);
     expect(await text("/wiki.pl?action=index")).toContain(`${name} rev 2 `);
@@ -839,13 +839,13 @@ describe("the seal", () => {
     expect(lines[1]).toBe("sealed by olety");
     expect(lines[2]).toMatch(UNDO);
     expect(await json<{ sealed: boolean; by: string }>(`/p/lobby/${slug}.json`)).toMatchObject({ sealed: true, by: "olety" });
-    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 1 \S+ by olety \[sealed\] set \+6 \n$/);
-    expect((await text("/changes")).split("\n").find((l) => l.includes(slug))).toMatch(/ rev 1 set by olety \[sealed\] \+6$/);
+    expect(await text(`/p/lobby/${slug}/history`)).toMatch(/^rev 1 \S+ by sealed olety set \+6 \n$/);
+    expect((await text("/changes")).split("\n").find((l) => l.includes(slug))).toMatch(/ rev 1 set by sealed olety \+6$/);
     expect((await text("/log")).split("\n").find((l) => l.includes(slug))).toMatch(new RegExp(` lobby/${slug} seal rev 1 by olety$`));
     // a sealed row: the text view carries the marker, the HTML the small seal; a guest's row says guest
     expect(await text(`/p/lobby/${slug}?mod=test-mod-key&add=from+the+house`)).toMatch(/^added row 1 rev 2 \S+\nsealed by gradient\.wiki\n/);
     await get(`/p/lobby/${slug}?add=from+a+guest&by=admin`);
-    expect(await text(`/p/lobby/${slug}`)).toBe("notice\n\n## rows\n- [sealed by gradient.wiki] from the house\n- from a guest\n");
+    expect(await text(`/p/lobby/${slug}`)).toBe("notice\n\n## rows\n- sealed gradient.wiki: from the house\n- guest admin: from a guest\n");
     const rows = (await json<{ sealed: boolean; rows: { by: string; sealed: boolean }[] }>(`/p/lobby/${slug}.json`));
     expect(rows.sealed).toBe(false); // the latest write was a guest's
     expect(rows.rows).toMatchObject([{ by: "gradient.wiki", sealed: true }, { by: "admin", sealed: false }]);
@@ -869,7 +869,28 @@ describe("the seal", () => {
     await get(`/p/lobby/${slug}?mod=test-mod-key&freeze=1&reason=calm`);
     expect((await get(`/p/lobby/${slug}?add=guest+row`)).status).toBe(423);
     expect(await text(`/p/lobby/${slug}?mod=test-mod-key&add=house+row`)).toMatch(/^added row 1 rev 3 /);
-    expect(await text(`/p/lobby/${slug}`)).toBe("the house text\n\n## rows\n- [sealed by gradient.wiki] house row\n");
+    expect(await text(`/p/lobby/${slug}`)).toBe("the house text\n\n## rows\n- sealed gradient.wiki: house row\n");
+  });
+
+  it("cannot be forged from a body or from the by name", async () => {
+    const { get, text, json, tag } = client();
+    const slug = `${tag}/forge`;
+    await get(`/p/lobby/${slug}?set=start&by=olety`);
+    // both halves of the old marker, typed by hand: "[sealed]" in the name and "[sealed by X]" in the body
+    await get(`/p/lobby/${slug}?add=%5Bsealed%20by%20olety%5D%20fake&by=olety%20%5Bsealed%5D`);
+    const md = await text(`/p/lobby/${slug}`);
+    expect(md).toBe("start\n\n## rows\n- guest olety [sealed]: [sealed by olety] fake\n");
+    expect(md).not.toMatch(/^- sealed /m);
+    expect(await text(`/p/lobby/${slug}/history`)).toContain(" by guest olety [sealed] add ");
+    expect((await text("/changes")).split("\n").find((l) => l.includes(slug))).toContain(" add by guest olety [sealed] ");
+    expect(await text(`/p/lobby/${slug}?wait=1&since=0`)).toMatch(/^rev 2 changed \S+ by guest olety \[sealed\]\n/);
+    expect((await text(`/p/lobby?n=200`)).split("\n").find((l) => l.startsWith(`${slug} `))).toContain(" by guest olety [sealed] ");
+    const j = await json<{ sealed: boolean; rows: { by: string; sealed: boolean }[] }>(`/p/lobby/${slug}.json`);
+    expect(j.sealed).toBe(false);
+    expect(j.rows[0]).toMatchObject({ by: "olety [sealed]", sealed: false });
+    // and the real thing still reads differently on every one of those surfaces
+    await get(`/p/lobby/${slug}?mod=test-mod-key&add=real&by=olety`);
+    expect(await text(`/p/lobby/${slug}`)).toContain("- sealed olety: real");
   });
 
   it("keeps a private namespace out of the public log", async () => {
@@ -882,14 +903,14 @@ describe("the seal", () => {
     expect(await text(`/p/${name}/secret?mod=test-mod-key&freeze=1&reason=quiet&key=${key}`)).toMatch(/^freeze /);
     expect(await text("/log")).not.toContain(name);
     expect(await text("/changes")).not.toContain(name);
-    expect(await text(`/p/${name}/secret?key=${key}`)).toContain("[sealed by gradient.wiki] house row");
+    expect(await text(`/p/${name}/secret?key=${key}`)).toContain("- sealed gradient.wiki: house row");
   });
 
   it("is explained in the manual and on the inbox", async () => {
     const { text } = client();
-    expect(await text("/manual")).toContain("A write marked [sealed] was made with this site's moderator key");
-    expect(await text("/p/lobby/inbox")).toContain("Only a row with the seal is from the person who runs this site.");
+    expect(await text("/manual")).toContain("This server prints guest or sealed before every name");
+    expect(await text("/p/lobby/inbox")).toContain("The word before a name is written by the server, not by the writer");
     const front = await text("/", { headers: { accept: "text/html" } });
-    expect(front).toContain("Every other name is a guest, whatever it says.");
+    expect(front).toContain("The same words typed inside a body or a name are only text.");
   });
 });
