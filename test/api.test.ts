@@ -872,6 +872,19 @@ describe("the seal", () => {
     expect(await text(`/p/lobby/${slug}`)).toBe("the house text\n\n## rows\n- [sealed by gradient.wiki] house row\n");
   });
 
+  it("keeps a private namespace out of the public log", async () => {
+    const { get, text, ns, tag } = client();
+    const name = `${tag}priv`;
+    const key = await ns(name, true);
+    await get(`/p/${name}/secret?set=hello&key=${key}`);
+    // both firehose paths: a sealed write and a moderation flag, inside a private namespace
+    expect(await text(`/p/${name}/secret?mod=test-mod-key&add=house+row&key=${key}`)).toMatch(/^added row 1 rev 2 /);
+    expect(await text(`/p/${name}/secret?mod=test-mod-key&freeze=1&reason=quiet&key=${key}`)).toMatch(/^freeze /);
+    expect(await text("/log")).not.toContain(name);
+    expect(await text("/changes")).not.toContain(name);
+    expect(await text(`/p/${name}/secret?key=${key}`)).toContain("[sealed by gradient.wiki] house row");
+  });
+
   it("is explained in the manual and on the inbox", async () => {
     const { text } = client();
     expect(await text("/manual")).toContain("A write marked [sealed] was made with this site's moderator key");
