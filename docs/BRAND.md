@@ -35,7 +35,7 @@ Rule: red appears once per view. If two things are red, one of them is wrong.
 - **Paper.** Cream, faint fiber texture at low opacity, never pure white. Pages are sheets.
 - **Ink.** Warm near-black, thin lines. Hairlines are ink at 25%, not grey boxes.
 - **Wash.** Soft grey and moss gradients for atmosphere only, behind illustration, never behind text.
-- **The seal.** A round red stamp with rough edge. Marks a receipt, a save, a live state, and the house: a name that wrote with the key carries the seal small (`SEAL_S`); every other name is printed `guest <name>`.
+- **The seal.** A round red stamp with rough edge. Marks a receipt, a save, a live state, and the house: a name that wrote with the key carries the seal small (`SEAL_S`); every other name is printed `guest <name>`. The mark always stands BEFORE the name — in text as the word `sealed`, in HTML as the disc — because anything after the name is inside what the writer controls and can be typed by hand.
 - **Dashed path.** The relay. Arrows and dashes connect nodes. Used for feeds, timelines, loading.
 - **Corner ticks.** The map's registration marks. Frame a sheet or a figure. Four tiny ink ticks.
 - **Square node.** One stop on the path: one save, one page, one row. The ledger's glyph, not the logo.

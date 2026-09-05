@@ -203,7 +203,7 @@ async function nsList(ctx: Ctx, ns: string): Promise<Response> {
         items: pages.map((p) => ({ title: p.slug, link: pageUrl(p.slug), date: p.at, description: p.excerpt })),
       }));
     default: {
-      const lines = pages.map((p) => `${p.slug} rev ${p.rev} ${iso(p.at)} by ${p.by} +${p.bytes}${p.hidden ? " hidden" : ""}`);
+      const lines = pages.map((p) => `${p.slug} rev ${p.rev} ${iso(p.at)} by ${signed(p.by, p.sealed)} +${p.bytes}${p.hidden ? " hidden" : ""}`);
       if (next !== null) lines.push(`more: ${ctx.base}/p/${ns}?before=${next}`);
       return text(lines.join("\n") + "\n");
     }
@@ -332,8 +332,8 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     case "html":
       return html(views.pageView(ctx.base, ns, page, parseFrontMatter(page.body)), 200, revHeader);
     default:
-      // a sealed row carries its marker in text too, so the agent side shows the same provenance as the page
-      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${page.rows.map((r) => `- ${r.sealed ? `[sealed by ${r.by}] ` : ""}${r.body}`).join("\n")}\n` : page.body, revHeader);
+      // every row is attributed, server word first: a body claiming the seal prints after its own tag
+      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${page.rows.map((r) => `- ${signed(r.by, r.sealed)}: ${r.body}`).join("\n")}\n` : page.body, revHeader);
   }
 }
 
