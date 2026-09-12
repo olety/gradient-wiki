@@ -318,7 +318,7 @@ describe("post-receipt policy", () => {
     await c.get(`${c.path}?add=row&id=stable`);
     expect(calls.filter((x) => x.messages[1]!.content.startsWith(`lobby/${c.tag} `))).toHaveLength(2);
     expect(await c.ownCases(true)).toHaveLength(0);
-    expect(await c.text(c.path)).toBe("ordinary\n\n## rows\n- row\n");
+    expect(await c.text(c.path)).toBe("ordinary\n\n## rows\n- guest anon: row\n");
   });
 
   it("does not classify private writes but accepts keyed reports without public logs", async () => {
