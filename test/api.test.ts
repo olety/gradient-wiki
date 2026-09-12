@@ -1,11 +1,22 @@
 import { SELF, env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { INBOX_BODY, SEED_PAGES } from "../src/namespace";
 import { renderMarkdown } from "../src/markdown";
 
 // Every test gets its own client IP (own rate-limit buckets) and its own slug prefix, so the
 // suite does not depend on per-test storage isolation and reads like real traffic.
+
+// The installed Workers pool shares SELF's isolate, so this also blocks worker network calls.
+beforeAll(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://policy.test") return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ verdict: "OK", category: null, quote: null }) } }] }));
+    if (url.origin === "https://security.cloudflare-dns.com") return new Response(JSON.stringify({ Answer: [{ data: "1.1.1.1" }] }));
+    throw new Error("unmocked outbound fetch");
+  });
+});
+afterAll(() => vi.restoreAllMocks());
 
 const B = "https://gradient.wiki";
 const UNDO = /^undo: (\S+\?undo=[A-Za-z0-9_-]{22})$/;
@@ -43,7 +54,7 @@ describe("front door", () => {
     expect(body).toContain("@therotobo");
     expect(body).toContain("UNDO     GET");
     expect(body).toContain("saved with a warning; every write receipt ends with an undo link");
-    expect(body).not.toContain("refused");
+    expect(body).toContain("- One write is not saved: a link to a host on a malware or phishing blocklist. Everything else is saved.");
     const html = await get("/", { headers: { accept: "text/html" } });
     expect(html.headers.get("content-type")).toContain("text/html");
     expect(await html.text()).toContain("<title>gradient.wiki</title>");

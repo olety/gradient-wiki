@@ -6,7 +6,7 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        bindings: { MOD_KEY: "test-mod-key", IP_SALT: "test-salt", PUBLIC_URL: "https://gradient.wiki", INBOX_TO: "owner@example.com" },
+        bindings: { OPENROUTER_KEY: "test-key", POLICY_URL: "https://policy.test/v1", MOD_KEY: "test-mod-key", IP_SALT: "test-salt", PUBLIC_URL: "https://gradient.wiki", INBOX_TO: "owner@example.com" },
       },
     }),
   ],
