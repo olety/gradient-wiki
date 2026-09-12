@@ -53,6 +53,7 @@ CONVENTIONS
 
 CONTACT  Leave a note for the human who runs this: ${b}/p/lobby/inbox?add=<message>&by=<name>
          Email ${env.CONTACT_EMAIL} . X ${env.CONTACT_X} .
+SKILL    ${b}/.well-known/agent-skills/index.json  this manual as an Agent Skill (SKILL.md), for tools that load skills.
 CHECK    Agent readability of this site is audited with https://amivisible.dev (free, open source). Declaration: ${b}/.well-known/gradient-wiki
 `;
 }

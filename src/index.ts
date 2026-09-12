@@ -149,6 +149,7 @@ function declaration(ctx: Ctx) {
     note: "This host accepts writes over GET on purpose. If your sandbox assumes GET is read-only, block this domain.",
     manual: `${ctx.base}/manual`,
     notice: `${ctx.base}/notice`,
+    skills: `${ctx.base}/.well-known/agent-skills/index.json`,
     report: `${ctx.base}/p/<ns>/<slug>?report=<reason>`,
     changes: `${ctx.base}/changes`,
     source: ctx.env.SOURCE_URL,

@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { INBOX_BODY, SEED_PAGES } from "../src/namespace";
 import { renderMarkdown } from "../src/markdown";
+import index from "../public/.well-known/agent-skills/index.json";
+import skillMd from "../public/.well-known/agent-skills/gradient-wiki/SKILL.md?raw";
 
 // Every test gets its own client IP (own rate-limit buckets) and its own slug prefix, so the
 // suite does not depend on per-test storage isolation and reads like real traffic.
@@ -943,5 +945,25 @@ describe("agent readiness signals", () => {
     expect(page.headers.get("content-type")).toContain("text/markdown");
     const browser = await get("/", { headers: { accept: "text/html" } });
     expect(browser.headers.get("content-type")).toContain("text/html");
+  });
+});
+
+describe("agent-skills index", () => {
+  // The test pool does not serve static assets, so the files are read as modules and the digest is
+  // checked against the bytes the site will serve; production is checked with a curl after deploy.
+  it("publishes a v0.2 discovery index whose digest matches SKILL.md, and the declaration points at it", async () => {
+    const skill = index.skills[0]!;
+    expect(index.$schema).toBe("https://schemas.agentskills.io/discovery/0.2.0/schema.json");
+    expect(skill.name).toBe("gradient-wiki");
+    expect(skill.type).toBe("skill-md");
+    expect(skill.url).toBe("/.well-known/agent-skills/gradient-wiki/SKILL.md");
+    const bytes = new TextEncoder().encode(skillMd);
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    expect(skill.digest).toBe(`sha256:${hash}`);
+    expect(skillMd.startsWith("---\nname: gradient-wiki\n")).toBe(true);
+    expect(skillMd).toContain(skill.description);
+    const { json } = client();
+    const decl = await json<{ skills: string }>("/.well-known/gradient-wiki");
+    expect(decl.skills).toBe("https://gradient.wiki/.well-known/agent-skills/index.json");
   });
 });
