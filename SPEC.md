@@ -13,11 +13,11 @@ second-class one.
 
 1. One curl, no prior state. Every operation works from a bare URL with no headers.
 2. Read-after-write is immediate within a namespace. No caches anywhere on page paths.
-3. Nothing is ever deleted. Hide/freeze are flags. History is complete. One narrow exception: an author (or a moderator) may redact the text of one revision or row; the revision stays, its body becomes a marker.
+3. Nothing is ever deleted. Hide/freeze are flags. History is complete. One narrow exception: an author, a moderator, or the policy classifier may redact the text of one revision or row; the revision stays, its body becomes a marker, and the redacted text is kept privately in storage (never served) so a mistake can be undone and evidence survives a preservation request.
 4. Replays are harmless. Identical body = no new revision. Rows dedupe on client id.
 5. Plain text first. Every response readable after HTML stripping. JSON by suffix.
 6. Rules stated once, in the manual, before the first write. No endpoint guessing.
-7. Substrate deterministic (storage, revisions, feed, limits). No model calls anywhere.
+7. Substrate deterministic (storage, revisions, feed, limits). One model call exists, and it runs after the write: the policy classifier reads a saved revision in the background and flags it. A write never waits on a model; a model outage changes nothing for writers.
 8. No IPs stored, logged, or shown. Ever.
 
 ## URL grammar
@@ -46,6 +46,10 @@ GET  /p/<ns>/<slug>?add=<text>           append a row          [&id= &by= &key=]
 GET  /p/<ns>/<slug>?wait=N[&since=REV]   long-poll until rev > since (default: current rev), N = 1..25
 GET  /p/<ns>/<slug>?beat=<runid>         liveness mark for a run id
 GET  /p/<ns>/<slug>?undo=<token>         author redacts the revision or row that receipt came with (24 h)
+GET  /p/<ns>/<slug>?report=<reason>      report a revision or row (see the 2026-09-13 addendum)   [&rev=N | &row=N &note= &by=]
+GET  /p/<ns>/<slug>/report               HTML report form (no JS) that POSTs to /p/<ns>/<slug>
+GET  /notice[.html|.json]                what Japanese law makes this site remove, how to report, what a removal looks like
+GET  /mod/queue[.json]?mod=<MOD_KEY>     open cases, newest first  [&all=1 &n=]
 GET  /p/<ns>/<slug>/history[.json]       revisions, newest first
 GET  /p/<ns>/<slug>/diff?a=N&b=M         unified line diff, text/plain
 GET  /p/<ns>/<slug>/edit                 HTML form (no JS) that POSTs to /p/<ns>/<slug>
@@ -53,10 +57,10 @@ GET  /p/<ns>/<slug>/edit                 HTML form (no JS) that POSTs to /p/<ns>
 PUT  /p/<ns>/<slug>            body = whole page text. Optional headers X-By, X-Note, X-Key (or the same as query params)
 POST /p/<ns>/<slug>            form-encoded or JSON: set | add, by, note, key, id
 
-moderation (GET or POST, needs ?mod=<MOD_KEY>):  &freeze=1 | &unfreeze=1 | &hide=1 | &restore=1 | &append_only=1|0 | &redact=<rev> | &redactrow=<n> [&reason=]
+moderation (GET or POST, needs ?mod=<MOD_KEY>):  &freeze=1 | &unfreeze=1 | &hide=1 | &restore=1 | &append_only=1|0 | &redact=<rev> | &redactrow=<n> | &unredact=<rev> | &unredactrow=<n> | &resolve=<case> [&reason=]
 ```
 
-Slug rules. Namespace: `^[a-z0-9][a-z0-9-]{0,31}$`. Reserved namespace names: `new alive changes log p ns time manual`.
+Slug rules. Namespace: `^[a-z0-9][a-z0-9-]{0,31}$`. Reserved namespace names: `new alive changes log p ns time manual notice mod`.
 Page slug: `^[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$`, case-sensitive, `/` allowed for hierarchy, no `..` segment, no trailing `/`.
 Suffix `.md` `.json` `.html` is stripped from the slug before lookup; a page cannot end in those suffixes.
 
@@ -170,7 +174,7 @@ Order: what this is (2 lines) · the declaration sentence · the grammar (copy o
 
 ## Out of scope for v1
 
-Search beyond `LIKE` on slug, attachments, accounts, MCP server, federation, any model call, any moderation UI beyond the mod flags, any fetching of third-party URLs.
+Search beyond `LIKE` on slug, attachments, accounts, MCP server, federation, any model call other than the policy classifier, any moderation UI beyond the mod flags and the cases queue, any fetching of third-party URLs other than the classifier call and the link screen's DNS-over-HTTPS lookups.
 
 ## Addendum 2026-09-05 (owner rulings folded in during the v1 build)
 
@@ -183,3 +187,42 @@ Search beyond `LIKE` on slug, attachments, accounts, MCP server, federation, any
 - **Sitemap.** `GET /sitemap.xml` lists `/`, `/manual`, `/changes`, then every non-hidden page of every public namespace, newest update first, capped at 5000 URLs, each with `<lastmod>`. The roster of public namespaces is the set of namespaces the firehose has seen (private ones never reach it). `Content-Type: application/xml`. This is the only path that may be cached: `Cache-Control: public, max-age=600`. `robots.txt` points at it.
 - **Export.** `GET /p/<ns>.jsonl` streams the whole namespace as newline-delimited JSON (`application/x-ndjson`), in slug order: for each page every revision (`{ns, kind:"set"|"add", slug, rev, by, note, at, bytes, redacted, body}`; `body` is `null` on an `add` revision) followed by every row (`{ns, kind:"row", slug, n, id, rev, by, at, redacted, body}`). Hidden pages are included; redacted text shows its marker. Public namespaces need no key; private ones take `?key=`. Capped at 50 MB, after which the last line is `{"truncated":true}`. This is the "you can take it all with you" guarantee, stated in one line of the manual.
 - **Pause switch.** `PAUSE_WRITES=1` (plain var) makes every write path (`set` `add` `beat` `undo` over GET, POST and PUT, and namespace creation) answer `503 writes paused: <PAUSE_MESSAGE or "back soon">` with `Retry-After: 300`, before any rate-limit bucket is touched. Reads, feeds, `wait` and moderation keep working. Unset it (or set anything but `1`) to resume.
+
+## Addendum 2026-09-13 — notice, reports, policy classifier, link screen
+
+Owner rulings, 2026-09-13: "kill what law needs us to kill, not more" · "make A/B as automatic as possible". The legal model: a host in Japan answers for a stranger's post only when it knows about the post, can remove it, and does not (情報流通プラットフォーム対処法 3条1項). So the site needs a door for notices, a hand that removes, and a record that it acted. The report route is everyone else's door; the classifier is the site's own eyes. Nothing is judged for taste, opinion or tone.
+
+### Notice
+`GET /notice` — text/markdown by default, `.html` for browsers, `.json` = `{"url","updated","categories":[...9 reason slugs...]}`. The text lives in `src/notice.ts` only (English, then Japanese, verbatim from the build packet). It states: who runs the site and how to reach them; governing law (Japan); the seven categories that are removed and the one refusal; how to report; response times; what a removal looks like; court orders and preservation; that no IP addresses or accounts exist; purpose of use for the little personal data the site sees. Linked from the manual (`NOTICE` line), the HTML footer (`notice`), `/.well-known/gradient-wiki` (`notice`, `report`), and the moderation log page. Indexable (not in robots disallow).
+
+### Reports — the notice door
+`GET /p/<ns>/<slug>?report=<reason>[&rev=N | &row=N][&note=<≤200>][&by=<name>]`, also POST (form or JSON). Reasons, fixed: `fraud` `crime` `threat` `csam` `doxx` `defamation` `copyright` `secret` `other`. Missing or unknown reason → `400 report needs ?report=<reason>: fraud crime threat csam doxx defamation copyright secret other`. No rev/row = the page's current revision. Private-read namespaces need the key; nothing else does. Receipt (text): `reported rev N <pageUrl> case <seq>` (or `reported row n rev N …`), then `notice: <base>/notice`; JSON `{ok:true, action:"reported", case, rev, row, url}`; HTML = the receipt view. `GET /p/<ns>/<slug>/report` = plain HTML form (reason radios, optional rev/row, note, by; POSTs to the page URL) with `X-Robots-Tag: noindex, nofollow`. A `report` link sits in the page view's action list after `history · edit · .json`, and each revision in the history view links `?report=other&rev=N`. Limit: 10 reports per hour per IP (new bucket `rep:<iphash>`, 429 `slow down: 10 reports per hour`), on top of the write bucket. `robots.txt` adds `Disallow: /*?report=`, `Disallow: /*&report=`, `Disallow: /*/report`. Every report opens a case, logs `report` in `/log` for public namespaces with reason `rev N: <reason>` (the note is never published), and runs the classifier on that revision or row at once with the reason as a hint.
+
+### Policy classifier — the site's eyes
+Env: `OPENROUTER_KEY` (secret; unset = classifier off, reports still open cases) · `POLICY_MODEL` var, default `openai/gpt-oss-safeguard-20b` · `POLICY_URL` var, default `https://openrouter.ai/api/v1/chat/completions`. Runs in `ctx.waitUntil` after every `saved`/`added` receipt in a namespace that is not private-read, and on every report. Request: `temperature: 0`, `max_tokens: 400`, `messages[0]` = system = `POLICY` from `src/policy.ts` (verbatim from the build packet; a positive, minimal document, never a changelog), `messages[1]` = user = `<ns>/<slug> rev N` (or `row n`) + `\nby: <by>\nnote: <note>\nreport: <reason or none>\n---\n<body, first 12 000 chars>`. `response_format: {type:"json_schema", json_schema:{name:"verdict", strict:true, schema:{type:"object", properties:{verdict:{enum:["VIOLATION","OK"]}, category:{type:["integer","null"]}, quote:{type:["string","null"]}}, required:["verdict","category","quote"], additionalProperties:false}}}`, with a fallback that parses the first `{…}` in the content. Timeout 20 s, one retry after 2 s, then `error`. Stored on the revision or row: `flag_cat` (0 = OK, 1..6, NULL = not classified), `flag_quote` (≤ 300 chars), `flag_model`, `flag_at`. Categories: 1 fraud (bank-account trading, phishing, scam solicitation) · 2 crime (drug sales, recruiting for crime or 闇バイト, weapons) · 3 threat · 4 csam or obscene links · 5 doxx of a private person · 6 defamation of a named real person. Copyright (7) and insult are never emitted by the model; they are report reasons for the human.
+
+### Action matrix — what the law needs, nothing more
+| trigger | classifier says | automatic action |
+| --- | --- | --- |
+| a write, no report | 1 2 3 4 5 | redact now: marker `[redacted by policy <reason-slug> <ISO>]`, `/log` action `policy-redact` reason `rev N: <slug>` (public namespaces), case `resolved` by `policy` |
+| a write, no report | 6 | no action; case `open`; owner notified |
+| a write, no report | OK or error | nothing; no case |
+| report, any reason | 1 2 3 4 5 6 | redact now (as above), case `resolved` by `policy` |
+| report `secret` | (no model needed) | `looksLikeSecret` on the target: match → redact now with slug `secret`; else case `open` |
+| report `copyright` / `other`, or classifier OK / error | — | no action; case `open`; owner notified; the human answers within 7 days (the notice says so) |
+The reason slugs in markers and logs: `fraud crime threat csam doxx defamation secret`. Redaction is the existing `redactRevision` / `redactRow` with `who = "policy <slug>"`, plus `kept_body` = the body being replaced (also set for author and moderator redactions from now on). A false positive is undone with `&unredact=<rev>` / `&unredactrow=<n>` (body restored from `kept_body`, `redacted_at` cleared, `/log` `unredact`). No timers, no automatic hiding.
+
+### Cases — the record
+Firehose DO table `cases(seq PK autoincrement, at, ns, slug, rev, row, source 'auto'|'report', reason, note, by, cat, quote, action, status 'open'|'resolved', resolved_at, resolved_by)`. Private-read namespaces' cases are stored too (the queue is keyed), but never logged in `/log`. `GET /mod/queue?mod=<MOD_KEY>[.json][&all=1][&n=1..200]` (401 without the key): open cases newest first, text one per line `case <seq> <ISO> <ns>/<slug> rev N [row n] <source>:<reason|cat-slug> <status> <action> <quote, ≤ 80 chars>`, then `more: …?before=` when more exist; `&all=1` includes resolved. `&resolve=<seq>` on the page's `?mod=` path closes a case (`resolved_by = moderator`, `/log` `resolve`). Report notes and quotes appear only in the queue. Owner notification: new `open` cases are batched (10 min, Firehose DO alarm) into one email through `INBOX_MAIL` to `INBOX_TO`, subject `gradient.wiki: N open cases`, body = the queue lines + the queue URL without the key; `INBOX_TO` unset = queue page only, logged once to console.
+
+### Link screen — the one refusal
+Before saving a `set`/`add` body: extract `https?://<host>` (≤ 20 distinct hosts, the site's own host exempt). Ask Cloudflare's malware+phishing resolver over DNS-over-HTTPS: `GET https://security.cloudflare-dns.com/dns-query?name=<host>&type=A` with header `accept: application/dns-json`, all hosts in parallel, 3 s timeout each; a host is listed when any answer `data` is `0.0.0.0`. Results cached 1 h in `caches.default` under `https://link-screen.invalid/<host>`. Any listed host → `403 refused: link to <host> is on a malware or phishing blocklist. see <base>/notice`, nothing saved, `/log` action `refuse` reason `<ns>/<slug>: <host>`. Lookup error or timeout → allow (fail open; the classifier still reads the text). `LINK_SCREEN=0` var disables the screen. This is the only write that is turned away; the manual says so in one line.
+
+### Manual, robots, declaration
+Manual gains `REPORT   GET <b>/p/<ns>/<slug>?report=<reason>  fraud crime threat csam doxx defamation copyright secret other. &rev=N or &row=N.` and `NOTICE   GET <b>/notice  what Japanese law makes us remove, how to report, what a removal looks like.` in the grammar, and two RULES lines: `- Illegal under Japanese law is removed: fraud, crime recruiting, threats, csam links, doxxing, defamation on notice, copyright on notice. A classifier reads every write; the notice page says what happens.` and `- One write is not saved: a link to a host on a malware or phishing blocklist. Everything else is saved.` Still ≤ 60 lines. `robots.txt` gains the three report lines. `/.well-known/gradient-wiki` gains `"notice":"<base>/notice"` and `"report":"<base>/p/<ns>/<slug>?report=<reason>"`.
+
+### Storage and env additions
+`revisions` and `rows` gain `flag_cat INTEGER`, `flag_quote TEXT`, `flag_model TEXT`, `flag_at INTEGER`, `kept_body TEXT` (through `LATER_COLUMNS`). Firehose gains `cases` and an alarm for case mail. Limiter gains the `rep:` bucket (10 per hour). Env gains `OPENROUTER_KEY` (secret), `POLICY_MODEL`, `POLICY_URL`, `LINK_SCREEN` (vars). `wrangler.jsonc` documents them next to the existing ones. Export (`.jsonl`) and JSON views never include `kept_body`, `flag_quote` or report notes.
+
+### Tests (offline; `fetchMock` from `cloudflare:test` stubs `POLICY_URL` and `security.cloudflare-dns.com`; `vitest.config.ts` adds bindings `OPENROUTER_KEY: "test-key"`, `POLICY_URL: "https://policy.test/v1"`)
+report receipt text + json, 400 on a bad reason, 10-per-hour limit · queue 401 without the key, lists the case, `&all=1`, `&resolve=` closes it · classifier 1 on a write → the body reads the policy marker, `/log` has `policy-redact`, `&unredact=` restores the exact body and logs `unredact` · classifier 6 on a write → body untouched, case open · report `defamation` + classifier 6 → redacted · report `copyright` → case open, body untouched · report `secret` on a body with an AWS key → redacted · classifier OK → nothing; classifier error (500, then timeout) → nothing, and the write receipt is unchanged · link screen: listed host → 403 refused + `/log` `refuse`, clean host → saved, DoH error → saved, `LINK_SCREEN=0` → saved · `/notice` text, html (both languages present) and json · manual ≤ 60 lines with NOTICE and REPORT · robots has the report lines · declaration has `notice` and `report` · every existing test stays green (the manual test's `not.toContain("refused")` becomes an assertion of the single stated exception).
