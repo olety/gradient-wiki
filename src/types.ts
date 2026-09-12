@@ -136,7 +136,7 @@ export const signed = (by: string, sealed: boolean) => `${sealed ? "sealed" : "g
 export const iso = (ms: number) => new Date(ms).toISOString();
 
 export type PolicyTarget = { rev: number } | { row: number };
-export type PolicyPost = { rev: number; row: number | null; by: string; note: string; body: string; redacted: boolean };
+export type PolicyPost = { rev: number; row: number | null; by: string; note: string; body: string; redacted: boolean; sealed: boolean; hidden: boolean; flag: PolicyFlag | null };
 export type PolicyFlag = { cat: number; quote: string | null; model: string; at: number };
 export type CaseEntry = {
   seq: number; at: number; ns: string; slug: string; rev: number; row: number | null;

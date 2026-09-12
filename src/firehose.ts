@@ -142,6 +142,14 @@ export class Firehose extends DurableObject<Env> {
     return true;
   }
 
+  getCase(seq: number): CaseEntry | null {
+    return this.sql.exec<CaseEntry>("SELECT * FROM cases WHERE seq = ?", seq).toArray()[0] ?? null;
+  }
+
+  openCaseCount(): number {
+    return this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM cases WHERE status = 'open'").one().n;
+  }
+
   listCases(q: { all?: boolean; before?: number; n: number }): { cases: CaseEntry[]; before: number | null } {
     const rows = this.sql.exec<CaseEntry>(
       "SELECT * FROM cases WHERE (? = 1 OR status = 'open') AND seq < ? ORDER BY seq DESC LIMIT ?",

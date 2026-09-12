@@ -87,6 +87,15 @@ type RowRec = {
 
 type UndoRec = { key: number; undo_hash: string; undo_expires: number };
 
+type PostRec = {
+  author: string; body: string | null; redacted_at: number | null; sealed: number;
+  flag_cat: number | null; flag_quote: string | null; flag_model: string | null; flag_at: number | null;
+};
+const postFacts = (r: PostRec) => ({
+  sealed: r.sealed === 1,
+  flag: r.flag_cat !== null && r.flag_model !== null && r.flag_at !== null ? { cat: r.flag_cat, quote: r.flag_quote, model: r.flag_model, at: r.flag_at } : null,
+});
+
 const redactionMarker = (who: string, at: number) => `[redacted by ${who} ${new Date(at).toISOString()}]`;
 
 export class Namespace extends DurableObject<Env> {
@@ -318,21 +327,31 @@ export class Namespace extends DurableObject<Env> {
   }
 
   policyTarget(slug: string, target?: PolicyTarget): PolicyPost | null {
-    const rev = target && "rev" in target ? target.rev : this.pageRec(slug)?.rev;
+    const page = this.pageRec(slug);
+    const rev = target && "rev" in target ? target.rev : page?.rev;
     if (target && "row" in target) {
-      const row = this.sql.exec<{ rev: number; n: number; author: string; body: string; redacted_at: number | null }>(
-        "SELECT rev, n, author, body, redacted_at FROM rows WHERE slug = ? AND n = ?", slug, target.row).toArray()[0];
-      return row ? { rev: row.rev, row: row.n, by: row.author, note: `row ${row.n}`, body: row.body, redacted: row.redacted_at !== null } : null;
+      const row = this.sql.exec<PostRec & { rev: number; n: number; body: string }>(
+        "SELECT rev, n, author, body, redacted_at, sealed, flag_cat, flag_quote, flag_model, flag_at FROM rows WHERE slug = ? AND n = ?", slug, target.row).toArray()[0];
+      return row ? { ...postFacts(row), hidden: page?.hidden === 1, rev: row.rev, row: row.n, by: row.author, note: `row ${row.n}`, body: row.body, redacted: row.redacted_at !== null } : null;
     }
     if (rev === undefined) return null;
-    const r = this.sql.exec<{ kind: string; body: string | null; author: string; note: string; redacted_at: number | null }>(
-      "SELECT kind, body, author, note, redacted_at FROM revisions WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
+    const r = this.sql.exec<PostRec & { kind: string; note: string }>(
+      "SELECT kind, body, author, note, redacted_at, sealed, flag_cat, flag_quote, flag_model, flag_at FROM revisions WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
     if (!r) return null;
     if (r.kind === "add") {
       const row = this.sql.exec<{ n: number }>("SELECT n FROM rows WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
       return row ? this.policyTarget(slug, { row: row.n }) : null;
     }
-    return { rev, row: null, by: r.author, note: r.note, body: r.body ?? "", redacted: r.redacted_at !== null };
+    return { ...postFacts(r), hidden: page?.hidden === 1, rev, row: null, by: r.author, note: r.note, body: r.body ?? "", redacted: r.redacted_at !== null };
+  }
+
+  /** Private evidence. Only the authenticated moderator HTML view calls this reader. */
+  keptBody(slug: string, target: PolicyTarget): string | null {
+    const post = this.policyTarget(slug, target);
+    if (!post) return null;
+    const table = post.row === null ? "revisions" : "rows";
+    const key = post.row === null ? "rev" : "n";
+    return this.sql.exec<{ kept_body: string | null }>(`SELECT kept_body FROM ${table} WHERE slug = ? AND ${key} = ?`, slug, post.row ?? post.rev).one().kept_body;
   }
 
   flag(slug: string, target: PolicyTarget, flag: PolicyFlag): void {

@@ -114,6 +114,22 @@ button,input[type=submit]{width:auto;display:inline-block;font:700 16px/1 var(--
 button.seal{background:var(--seal);border-color:var(--seal);color:var(--paper)}
 @media(hover:hover){button.seal:hover{background:var(--seal-deep);border-color:var(--seal-deep)}button:not(.seal):hover,input[type=submit]:hover{background:var(--paper-deep)}}
 button:active,input[type=submit]:active{transform:scale(.96)}
+.chip{font:13px/1.7 var(--mono);padding:.1rem .3rem;background:var(--paper-deep);color:var(--ink-soft)}
+details.case{margin:.2rem 0 .4rem;font:15px/1.6 var(--mono);color:var(--ink)}
+details.case summary{position:relative;display:block;cursor:pointer;list-style:none;padding:.4rem 0 .4rem 1.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+details.case summary::-webkit-details-marker{display:none}
+details.case summary::before{content:"";position:absolute;left:2px;top:calc(.4rem + .45em);width:0;height:0;border:5px solid transparent;border-left:7px solid var(--ink-soft)}
+details.case[open]>summary::before{transform:rotate(90deg) translateX(1px)}
+ol.path li.redacted .what:has(>details.case){text-decoration:none}
+ol.path li.redacted details.case summary{text-decoration:line-through;color:var(--ink-soft)}
+ol.path dl{margin:.5rem 0 1rem}
+ol.path dt{color:var(--ink-soft)}
+ol.path dd{margin:0 0 .6rem;white-space:pre-wrap;overflow-wrap:anywhere}
+details.case form{display:flex;flex-wrap:wrap;gap:.4rem;margin:0 0 .75rem}
+details.case button{margin:0;max-width:100%;padding:.5rem .7rem;overflow-wrap:anywhere}
+.acts form:has(button.link){margin:0}
+button.link{font:14px/1.6 var(--mono);min-height:0;padding:.5rem 0;margin:0;border:0;border-radius:0;background:none;color:var(--ink-soft)}
+@media(hover:hover){button.link:hover{background:none;color:var(--ink);text-decoration:underline}}
 .receipt{position:relative;max-width:42rem;margin:0 0 1rem}
 .receipt pre{margin:0;padding:1rem 5.5rem 1rem 1rem;white-space:pre-wrap;overflow-wrap:break-word}
 .receipt .stamp{position:absolute;right:.9rem;top:-.7rem;width:66px;height:66px;transform:rotate(-8deg)}

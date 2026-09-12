@@ -1,8 +1,9 @@
-import type { Beat, Change, LogEntry, Page, PageSummary, Revision } from "./types";
+import type { Beat, Change, LogEntry, Page, PageSummary, Revision, CaseEntry, PolicyPost } from "./types";
 import { iso } from "./types";
 import { escapeHtml as esc, renderInline, renderMarkdown } from "./markdown";
 import { CSS } from "./css";
 import { NOTICE_CATEGORIES } from "./notice";
+import { CATEGORY_SLUGS } from "./policy";
 
 // Server-rendered views. Semantic markup, one stylesheet (src/css.ts), no JavaScript required: the
 // only script is the copy button, which appears when scripting is on. The visual language is
@@ -127,8 +128,8 @@ const KIND: Record<string, string> = { set: "page", add: "row", redact: "redact"
  * is a guest and says so, because a name here is a claim, not an identity: a guest called admin
  * is not the admin.
  */
-function who(by: string, sealed: boolean): string {
-  return sealed ? `${SEAL_S}${esc(by)}` : `<span class="guest">guest</span> ${esc(by)}`;
+function who(by: string, sealed: boolean, ink = false): string {
+  return sealed ? `${ink ? "sealed " : SEAL_S}${esc(by)}` : `<span class="guest">guest</span> ${esc(by)}`;
 }
 
 /**
@@ -136,9 +137,9 @@ function who(by: string, sealed: boolean): string {
  * an optional quiet subtitle, then one plain line of facts on the left and the actions on the
  * right. No labels: the facts are what a human may need to cite, small and in bark.
  */
-function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; acts?: [string, string][] }): string {
+function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; acts?: ([string, string] | { post: string; label: string; name: string; value: string })[] }): string {
   const ns = o.ns ? `${o.nsHref ? `<a class="nsl" href="${esc(o.nsHref)}">${esc(o.ns)}</a>` : `<span class="nsl">${esc(o.ns)}</span>`}<span class="sep">/</span>` : "";
-  const acts = o.acts?.length ? `<ul class="acts">${o.acts.map(([t, h]) => `<li><a href="${esc(h)}">${t}</a></li>`).join("")}</ul>` : "";
+  const acts = o.acts?.length ? `<ul class="acts">${o.acts.map((a) => Array.isArray(a) ? `<li><a href="${esc(a[1])}">${a[0]}</a></li>` : `<li><form method="post" action="${esc(a.post)}"><button class="link" name="${esc(a.name)}" value="${esc(a.value)}">${esc(a.label)}</button></form></li>`).join("")}</ul>` : "";
   const under = o.facts || acts ? `<div class="under"><p class="facts">${o.facts ?? ""}</p>${acts}</div>` : "";
   return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}</div>`;
 }
@@ -348,8 +349,9 @@ export function agentView(base: string, human: string, body: string, ok: boolean
   const u = new URL(human);
   const path = u.pathname + u.search;
   const manual = ok && kindOf(u.pathname).kind === "manual";
-  return layout(base, { title: `${u.host}${path} · agent view`, description: `The text an agent gets at ${human}.`, url: human, agent: true },
-    `<div class="head"><div class="h1row"><h1>${crumbs(base, u)}</h1>${copyButton("#agent-text")}</div></div><pre id="agent-text" class="raw${manual ? " cols" : ""}">${agentBody(base, u.pathname, body, ok)}</pre>`);
+  const moderator = u.pathname.startsWith("/mod");
+  return layout(base, { title: `${u.host}${path} · agent view`, description: `The text an agent gets at ${human}.`, url: human, agent: true, static: moderator },
+    `<div class="head"><div class="h1row"><h1>${crumbs(base, u)}</h1>${moderator ? "" : copyButton("#agent-text")}</div></div><pre id="agent-text" class="raw${manual ? " cols" : ""}">${agentBody(base, u.pathname, body, ok)}</pre>`);
 }
 
 // ---- pages --------------------------------------------------------------------------------------
@@ -491,7 +493,7 @@ export function logView(base: string, entries: LogEntry[], before: number | null
 /** A 404 seen from a browser: the same sentence the text API gives, and one thing to do next. */
 export function notFoundView(base: string, message: string, editUrl?: string, here?: string): string {
   const action = editUrl ? `<a href="${esc(editUrl)}">write it with the form</a>` : `<a href="${esc(base)}/#manual">read the manual</a>`;
-  return layout(base, { title: `nothing here · ${SITE}`, description: message, url: `${base}/`, toggle: here }, `${head({ name: "nothing here yet" })}${empty(base, esc(message), action)}`);
+  return layout(base, { title: `nothing here · ${SITE}`, description: message, url: `${base}/`, toggle: here, static: here ? new URL(here).pathname.startsWith("/mod") : false }, `${head({ name: "nothing here yet" })}${empty(base, esc(message), action)}`);
 }
 
 export function noticeView(base: string, text: string): string {
@@ -510,4 +512,53 @@ ${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "report", acts: [["page
 <label>by<input name="by" maxlength="64" autocomplete="off"></label>
 ${key ? `<input type="hidden" name="key" value="${esc(key)}">` : ""}
 <button class="seal">report</button></form>`);
+}
+
+// ---- moderator forms: no scripts, and the only red is the moderator mark in the head -----------
+
+export function modSignInView(base: string, wrong = false): string {
+  return layout(base, { title: `moderator · ${SITE}`, description: "Sign in with the moderator key.", url: `${base}/mod`, static: true }, `
+${head({ name: "moderator" })}
+${wrong ? '<p class="notice">that key did not open the door.</p>' : ""}
+<form method="post" action="/mod">
+<label>key<input type="password" name="key" autocomplete="off" required></label>
+<button>sign in</button></form>`);
+}
+
+export type QueueCase = CaseEntry & { post: PolicyPost | null; hidden: boolean; kept: string | null };
+
+export function queueView(base: string, cases: QueueCase[], openCount: number, before: number | null, query: URLSearchParams): string {
+  const all = query.get("all") === "1";
+  const items = byDay(cases, (c, dated) => {
+    const u = `${base}/p/${c.ns}/${c.slug}`;
+    const post = c.post;
+    const redacted = post?.redacted ?? false;
+    const flag = post?.flag;
+    const summary = c.quote || c.note || "(no quote)";
+    const actions = [c.status === "open" && "resolve", redacted && "unredact", post && !redacted && c.status === "open" && "redact", c.hidden && "restore"].filter(Boolean) as string[];
+    const drawer = `<details class="case">
+<summary>${esc(summary)}</summary>
+<dl>
+<dt>text</dt><dd class="mono">${redacted ? `<span>kept privately, never served</span><br>${esc(c.kept ?? "(no kept text)")}` : esc(post?.body ?? "(no text)")}</dd>
+<dt>by</dt><dd>${post ? who(post.by, post.sealed, true) : "(no author)"}</dd>
+${c.source === "report" ? `<dt>reported</dt><dd>by ${esc(c.by)} · ${esc(c.reason)}${c.note ? ` · ${esc(c.note)}` : ""}</dd>` : ""}
+${flag ? `<dt>flag</dt><dd>${esc(flag.cat === 0 ? "OK" : CATEGORY_SLUGS[flag.cat - 1] ?? String(flag.cat))}${flag.quote ? ` · ${esc(flag.quote)}` : ""} · ${esc(flag.model)} · ${tm(flag.at, stampDate(flag.at))}</dd>` : ""}
+</dl>
+<form method="post" action="/mod/queue"><input type="hidden" name="case" value="${c.seq}">${all ? '<input type="hidden" name="all" value="1">' : ""}${actions.map((a) => `<button name="action" value="${a}">${a}</button>`).join("")}</form>
+<a href="${esc(u)}">open page</a> · <a href="${esc(u)}/history">history</a>
+</details>`;
+    const reason = c.source === "auto" && c.cat !== null ? CATEGORY_SLUGS[c.cat - 1] ?? c.reason : c.reason;
+    return stop({ at: c.at, dated, id: `case-${c.seq}`, cls: `${c.status}${redacted ? " redacted" : ""}`,
+      where: `${pageLink(base, c.ns, c.slug)} rev ${c.rev}${c.row !== null ? ` row ${c.row}` : ""}${drawer}`,
+      facts: `<span class="chip">${c.source}·${esc(reason)}</span> · ${redacted ? "redacted" : c.status}` });
+  });
+  // Browser links never carry the key, including paging and the human|agent switch.
+  const next = new URLSearchParams();
+  if (all) next.set("all", "1");
+  if (query.has("n")) next.set("n", query.get("n")!);
+  if (before !== null) next.set("before", String(before));
+  const list = items.length ? path(items) : empty(base, "no open cases.", '<a href="/mod/queue?all=1">see all</a>');
+  return layout(base, { title: `queue · ${SITE}`, description: "Cases for the moderator, newest first.", url: `${base}/mod/queue`, toggle: `${base}/mod/queue${all ? "?all=1" : ""}`, static: true }, `
+${head({ name: "queue", facts: `${openCount ? `${openCount} open cases` : "no open cases"} · ${SEAL_S}sealed as moderator`, acts: [["open", "/mod/queue"], ["all", "/mod/queue?all=1"], ["log", "/log"], ["notice", "/notice"], { post: "/mod", label: "sign out", name: "signout", value: "1" }] })}
+${list}${before !== null ? `<p class="more"><a href="/mod/queue?${esc(next.toString())}">more</a></p>` : ""}`);
 }

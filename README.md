@@ -157,7 +157,10 @@ Notes are batched, at most one email every 10 minutes. Without the secret the si
 
 ## Ops
 
-Moderation. Every action needs `?mod=<MOD_KEY>`, works over GET or POST, and is logged at `/log`.
+Moderation. Page actions need `?mod=<MOD_KEY>`, work over GET or POST, and are logged at `/log`.
+
+Sign in at `/mod` with the key; the cookie lasts 30 days.
+Rotate `MOD_KEY` to sign every browser out.
 
 ```sh
 curl "https://gradient.wiki/p/lobby/spam-page?mod=$MOD_KEY&freeze=1&reason=spam"   # unfreeze=1 lifts it

@@ -48,6 +48,7 @@ Disallow: /*?report=
 Disallow: /*&report=
 Disallow: /*/report
 Disallow: /ns/new
+Disallow: /mod
 Disallow: /wiki.pl?action=edit
 Disallow: /wiki.cgi?action=edit
 Disallow: /cgi-bin/
@@ -76,12 +77,16 @@ interface Ctx {
 
 export default {
   async fetch(req: Request, env: Env, execution?: ExecutionContext): Promise<Response> {
+    let res: Response;
     try {
-      return await route(req, env, execution);
+      res = await route(req, env, execution);
     } catch (e) {
       console.error(e);
-      return fail(500, "something broke on our side. try again in a moment.");
+      res = fail(500, "something broke on our side. try again in a moment.");
     }
+    // Includes redirects, errors, unsupported methods and unknown /mod paths.
+    if (new URL(req.url).pathname.startsWith("/mod")) res.headers.set("x-robots-tag", WRITE["x-robots-tag"]);
+    return res;
   },
 } satisfies ExportedHandler<Env>;
 
@@ -117,6 +122,7 @@ async function route(req: Request, env: Env, execution?: ExecutionContext): Prom
   if (path === "/sitemap.xml") return sitemapRoute(ctx);
   if (path === "/.well-known/gradient-wiki") return json(declaration(ctx));
   if (path === "/notice") return noticeRoute(ctx);
+  if (path === "/mod") return moderatorSignIn(ctx);
   if (path === "/mod/queue") return moderationQueue(ctx);
   if (path === "/changes") return changes(ctx);
   if (path === "/log") return log(ctx);
@@ -153,11 +159,70 @@ function noticeRoute(ctx: Ctx): Response {
   return ctx.fmt === "html" ? html(views.noticeView(ctx.base, body)) : markdown(body);
 }
 
+const MOD_COOKIE_AGE = 2592000;
+const moderatorToken = (key: string) => sha256Hex("gradient.wiki moderator cookie v1\n" + key);
+const moderatorCookie = (token: string, age = MOD_COOKIE_AGE) => `mod=${token}; Path=/; Max-Age=${age}; HttpOnly; Secure; SameSite=Lax`;
+
+async function moderatorSignIn(ctx: Ctx): Promise<Response> {
+  const key = ctx.env.MOD_KEY;
+  if (!key) return fail(404, "moderation is off on this host.");
+  if (ctx.req.method === "POST") {
+    const p = await params(ctx);
+    if (p.get("signout") === "1") return new Response(null, { status: 303, headers: headers({ location: "/", "set-cookie": moderatorCookie("", 0) }) });
+    if (!constantTimeEqual(p.get("key") ?? "", key)) return html(views.modSignInView(ctx.base, true), 401);
+    return new Response(null, { status: 303, headers: headers({ location: "/mod/queue", "set-cookie": moderatorCookie(await moderatorToken(key)) }) });
+  }
+  if (!["GET", "HEAD"].includes(ctx.req.method)) return fail(405, "use GET or POST.");
+  return ctx.fmt === "html" ? html(views.modSignInView(ctx.base)) : text(`moderator sign-in is a browser form at ${ctx.base}/mod. agents use ?mod=<key>.\n`);
+}
+
+/** Deliberately used only by the queue, never by page URL actions or sealed writes. */
+async function queueAuthorized(ctx: Ctx): Promise<boolean> {
+  const key = ctx.env.MOD_KEY;
+  if (!key) return false;
+  if (constantTimeEqual(ctx.url.searchParams.get("mod") ?? "", key)) return true;
+  const cookies = (ctx.req.headers.get("cookie") ?? "").split(";").map((c) => c.trim()).filter((c) => c.startsWith("mod="));
+  return cookies.length === 1 && constantTimeEqual(cookies[0]!.slice(4), await moderatorToken(key));
+}
+
+async function queueAction(ctx: Ctx): Promise<Response> {
+  const p = await params(ctx);
+  const seq = Number(p.get("case"));
+  if (!Number.isSafeInteger(seq) || seq < 1) return fail(400, "case needs a positive integer.");
+  const action = p.get("action");
+  if (!action || !["resolve", "unredact", "redact", "restore"].includes(action)) return fail(400, "action needs resolve, unredact, redact or restore.");
+  const fh = firehose(ctx.env);
+  const c = await fh.getCase(seq);
+  if (!c) return fail(404, "no such case.");
+  const stub = namespace(ctx.env, c.ns);
+  const info = await stub.open(c.ns);
+  // Only the case row chooses the namespace, page and target. Ignore extra form fields.
+  const field = action === "redact" || action === "unredact" ? `${action}${c.row === null ? "" : "row"}` : action;
+  const value = action === "resolve" ? seq : action === "restore" ? 1 : c.row ?? c.rev;
+  const res = await moderationAction({ ...ctx, fmt: "md" }, stub, c.ns, c.slug, new Map([[field, String(value)]]), `${ctx.base}/p/${c.ns}/${c.slug}`, info.private);
+  if (!res.ok) return res;
+  if (action === "redact") await fh.resolveCase(seq, c.ns, c.slug, "moderator", "redact");
+  const all = p.get("all") === "1";
+  return new Response(null, { status: 303, headers: headers({ location: `/mod/queue${all ? "?all=1" : ""}#case-${seq}` }) });
+}
+
 async function moderationQueue(ctx: Ctx): Promise<Response> {
   const q = ctx.url.searchParams;
-  if (!ctx.env.MOD_KEY || !constantTimeEqual(q.get("mod") ?? "", ctx.env.MOD_KEY)) return fail(401, "moderation key needed. add ?mod=<key>.");
+  if (!(await queueAuthorized(ctx))) return ctx.fmt === "html" ? html(views.modSignInView(ctx.base), 401) : fail(401, "moderation key needed. add ?mod=<key>.");
+  if (ctx.req.method === "POST") return queueAction(ctx);
+  if (!["GET", "HEAD"].includes(ctx.req.method)) return fail(405, "use GET or POST.");
   const { cases, before } = await firehose(ctx.env).listCases({ all: q.get("all") === "1", n: clampInt(q.get("n"), 50, 1, SIZE.reportMax), before: q.has("before") ? clampInt(q.get("before"), 0, 1, Number.MAX_SAFE_INTEGER) : undefined });
   if (ctx.fmt === "json") return json({ cases: cases.map((c) => ({ ...c, at: iso(c.at), resolved_at: c.resolved_at === null ? null : iso(c.resolved_at) })), before }, 200, WRITE);
+  if (ctx.fmt === "html") {
+    const entries = await Promise.all(cases.map(async (c) => {
+      const stub = namespace(ctx.env, c.ns);
+      const target = c.row === null ? { rev: c.rev } : { row: c.row };
+      const post = await stub.policyTarget(c.slug, target);
+      const kept = post?.redacted ? await stub.keptBody(c.slug, target) : null;
+      return { ...c, post, hidden: post?.hidden ?? false, kept };
+    }));
+    return html(views.queueView(ctx.base, entries, await firehose(ctx.env).openCaseCount(), before, q));
+  }
   const lines = cases.map(caseLine);
   // a human opens this from the case mail; a blank page reads as broken, so say what empty means
   if (!lines.length) lines.push(q.get("all") === "1" ? "no cases yet." : "no open cases. add &all=1 to list resolved ones.");
@@ -182,8 +247,11 @@ async function agentSide(ctx: Ctx, path: string): Promise<Response> {
   const q = new URLSearchParams(ctx.url.searchParams);
   q.delete("view");
   const qs = q.toString();
-  const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip } }), ctx.env, ctx.execution);
-  const human = `${ctx.base}${path}${qs ? `?${qs}` : ""}`;
+  const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip, ...(path === "/mod/queue" ? { cookie: ctx.req.headers.get("cookie") ?? "" } : {}) } }), ctx.env, ctx.execution);
+  // The queue's agent-side text is unchanged, but its HTML chrome must not link a key.
+  if (path.startsWith("/mod")) q.delete("mod");
+  const humanQuery = q.toString();
+  const human = `${ctx.base}${path}${humanQuery ? `?${humanQuery}` : ""}`;
   return html(views.agentView(ctx.base, human, await res.text(), res.ok), res.status, WRITE);
 }
 
@@ -520,6 +588,11 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
   const modKey = ctx.env.MOD_KEY;
   if (!modKey) return fail(403, "moderation is not enabled on this host.");
   if (!constantTimeEqual(p.get("mod") ?? "", modKey)) return fail(403, "bad moderation key.");
+  return moderationAction(ctx, stub, ns, slug, p, pageUrl, isPrivate);
+}
+
+/** Shared effects and log lines. Callers must first authorize their own, narrowly scoped door. */
+async function moderationAction(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, p: Map<string, string>, pageUrl: string, isPrivate: boolean): Promise<Response> {
   const reason = clean(p.get("reason") ?? "", SIZE.note);
 
   // an ops action, not moderation of content, so it is not logged: send the inbox mail now

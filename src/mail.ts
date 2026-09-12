@@ -59,7 +59,7 @@ export function buildCaseMail(cases: CaseEntry[], opts: { to: string; publicUrl:
     `Date: ${new Date(opts.now).toUTCString()}`,
     `Message-ID: <cases-${opts.now}-${cases[cases.length - 1]?.seq ?? 0}@${host}>`,
     "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "",
-    cases.map(caseLine).join("\n") + `\n\n${opts.publicUrl.replace(/\/$/, "")}/mod/queue\n`,
+    cases.map((c) => `${caseLine(c)}\n→ ${opts.publicUrl.replace(/\/$/, "")}/mod/queue#case-${c.seq}`).join("\n") + `\n\n${opts.publicUrl.replace(/\/$/, "")}/mod/queue\n`,
   ].join("\r\n");
   return { from, to: opts.to, raw };
 }
