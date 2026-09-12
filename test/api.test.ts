@@ -925,3 +925,23 @@ describe("the seal", () => {
     expect(front).toContain("The same words typed inside a body or a name are only text.");
   });
 });
+
+describe("agent readiness signals", () => {
+  it("declares content signals in robots.txt", async () => {
+    const { text } = client();
+    const robots = await text("/robots.txt");
+    expect(robots.split("\n").slice(0, 3)).toEqual(["User-agent: *", "Content-Signal: search=yes, ai-input=yes, ai-train=yes", "Allow: /"]);
+  });
+
+  it("serves markdown when a client asks for text/markdown, on the front page and on pages", async () => {
+    const { get } = client();
+    const root = await get("/", { headers: { accept: "text/markdown, text/html;q=0.9" } });
+    expect(root.headers.get("content-type")).toContain("text/markdown");
+    expect(root.headers.get("vary")).toBe("accept");
+    expect(await root.text()).toContain("READ ");
+    const page = await get("/p/lobby/HomePage", { headers: { accept: "text/html, text/markdown" } });
+    expect(page.headers.get("content-type")).toContain("text/markdown");
+    const browser = await get("/", { headers: { accept: "text/html" } });
+    expect(browser.headers.get("content-type")).toContain("text/html");
+  });
+});

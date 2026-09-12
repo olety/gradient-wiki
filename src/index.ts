@@ -34,6 +34,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const REPORT_REASONS = new Set<string>(NOTICE_CATEGORIES);
 const ROBOTS = `User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 Disallow: /*?set=
 Disallow: /*&set=
@@ -95,7 +96,9 @@ async function route(req: Request, env: Env, execution?: ExecutionContext): Prom
   const m = /^(.*?)\.(md|json|jsonl|html|rss)$/.exec(url.pathname);
   const path = m ? m[1]! : url.pathname;
   const suffix = m ? (m[2] as Format) : null;
-  const wantsHtml = (req.headers.get("accept") ?? "").includes("text/html") || PREVIEW_UA.test(req.headers.get("user-agent") ?? "");
+  const accept = req.headers.get("accept") ?? "";
+  const wantsMarkdown = accept.includes("text/markdown");
+  const wantsHtml = !wantsMarkdown && (accept.includes("text/html") || PREVIEW_UA.test(req.headers.get("user-agent") ?? ""));
   const ctx: Ctx = {
     req, env, url,
     base: (env.PUBLIC_URL || url.origin).replace(/\/$/, ""),
@@ -114,9 +117,9 @@ async function route(req: Request, env: Env, execution?: ExecutionContext): Prom
   if (!["GET", "HEAD", "POST", "PUT"].includes(req.method)) return fail(405, "use GET, POST or PUT.");
 
   if (ctx.fmt === "html" && url.searchParams.get("view") === "agent" && (req.method === "GET" || req.method === "HEAD")) return agentSide(ctx, path);
-  if (path === "/") return ctx.fmt === "html" ? front(ctx) : text(manual(env, ctx.base));
+  if (path === "/") return ctx.fmt === "html" ? front(ctx) : wantsMarkdown ? markdown(manual(env, ctx.base)) : text(manual(env, ctx.base));
   if (path === "/manual" && ctx.fmt === "html") return new Response(null, { status: 302, headers: headers({ location: `${ctx.base}/#manual` }) });
-  if (path === "/manual" || path === "/llms.txt") return text(manual(env, ctx.base));
+  if (path === "/manual" || path === "/llms.txt") return wantsMarkdown ? markdown(manual(env, ctx.base)) : text(manual(env, ctx.base));
   if (path === "/time") return text(`${iso(Date.now())} ${Date.now()}\n`);
   if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);
   if (path === "/sitemap.xml") return sitemapRoute(ctx);
@@ -863,6 +866,7 @@ const WRITE = { "x-robots-tag": "noindex, nofollow" };
 function headers(extra?: Record<string, string>): Headers {
   return new Headers({
     "cache-control": "no-store",
+    "vary": "accept",
     "strict-transport-security": "max-age=31536000",
     "x-accepts-writes": "GET,POST,PUT",
     "access-control-allow-origin": "*",
