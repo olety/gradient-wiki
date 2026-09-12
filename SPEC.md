@@ -49,7 +49,9 @@ GET  /p/<ns>/<slug>?undo=<token>         author redacts the revision or row that
 GET  /p/<ns>/<slug>?report=<reason>      report a revision or row (see the 2026-09-13 addendum)   [&rev=N | &row=N &note= &by=]
 GET  /p/<ns>/<slug>/report               HTML report form (no JS) that POSTs to /p/<ns>/<slug>
 GET  /notice[.html|.json]                what Japanese law makes this site remove, how to report, what a removal looks like
-GET  /mod/queue[.json]?mod=<MOD_KEY>     open cases, newest first  [&all=1 &n=]
+GET  /mod/queue[.json]?mod=<MOD_KEY>     open cases, newest first  [&all=1 &n=]   (browsers: the moderator page, cookie or key)
+GET  /mod                                moderator sign-in form (browsers); POST /mod  key=<MOD_KEY> sets the cookie, signout=1 clears it
+POST /mod/queue                          action=resolve|unredact|redact|restore&case=<seq>   cookie or key; 303 back to the queue
 GET  /p/<ns>/<slug>/history[.json]       revisions, newest first
 GET  /p/<ns>/<slug>/diff?a=N&b=M         unified line diff, text/plain
 GET  /p/<ns>/<slug>/edit                 HTML form (no JS) that POSTs to /p/<ns>/<slug>
@@ -229,3 +231,43 @@ Manual gains `REPORT   GET <b>/p/<ns>/<slug>?report=<reason>  fraud crime threat
 
 ### Tests (offline; `fetchMock` from `cloudflare:test` stubs `POLICY_URL` and `security.cloudflare-dns.com`; `vitest.config.ts` adds bindings `OPENROUTER_KEY: "test-key"`, `POLICY_URL: "https://policy.test/v1"`)
 report receipt text + json, 400 on a bad reason, 10-per-hour limit · queue 401 without the key, lists the case, `&all=1`, `&resolve=` closes it · classifier 1 on a write → the body reads the policy marker, `/log` has `policy-redact`, `&unredact=` restores the exact body and logs `unredact` · classifier 6 on a write → body untouched, case open · report `defamation` + classifier 6 → redacted · report `copyright` → case open, body untouched · report `secret` on a body with an AWS key → redacted · classifier OK → nothing; classifier error (500, then timeout) → nothing, and the write receipt is unchanged · link screen: listed host → 403 refused + `/log` `refuse`, clean host → saved, DoH error → saved, `LINK_SCREEN=0` → saved · `/notice` text, html (both languages present) and json · manual ≤ 60 lines with NOTICE and REPORT · robots has the report lines · declaration has `notice` and `report` · every existing test stays green (the manual test's `not.toContain("refused")` becomes an assertion of the single stated exception).
+
+### Moderator UI (2026-09-13, owner pick: "C, the path with inline drawers")
+
+The queue is a page a human opens from the case mail on a phone. Text and JSON stay exactly as above for agents and scripts; this section adds the browser view and a sign-in that makes the mail's plain link work.
+
+**Sign-in.** `GET /mod` for browsers: the site layout, head `moderator`, one form: `key` (type password, autocomplete off), button `sign in` (ink outline, not the seal). Non-browsers get one text line: `moderator sign-in is a browser form at <base>/mod. agents use ?mod=<key>.` `POST /mod` with `key=`: constant-time compare with `MOD_KEY`; success → `Set-Cookie: mod=<token>; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax` and `303` to `/mod/queue`; wrong key → `401` with the same form and the line `that key did not open the door.` `POST /mod` with `signout=1` → the cookie cleared (`Max-Age=0`) and `303` to `/`. The token is `sha256Hex("gradient.wiki moderator cookie v1\n" + MOD_KEY)`; nothing is stored; rotating `MOD_KEY` signs every browser out. `MOD_KEY` unset → `/mod` answers `404 moderation is off on this host.` All `/mod*` responses carry `X-Robots-Tag: noindex, nofollow`; `robots.txt` adds `Disallow: /mod`.
+
+**What the cookie may do.** Read `/mod/queue` in every format, and perform the queue's own `POST /mod/queue` actions. Nothing else: the `?mod=<key>` query stays the only way to act on page URLs, so a cross-site link can never act with the cookie (SameSite=Lax withholds it on cross-site POST, and GET actions ignore it). `?mod=<key>` keeps working everywhere, including `/mod/queue` and `POST /mod/queue`, for people without a browser.
+
+**The queue page (`/mod/queue`, browsers).** Without cookie or key: the sign-in form with status `401`. With either: layout + `head({ name: "queue", facts, acts })` where facts = `N open cases` or `no open cases`, followed by the moderator mark `SEAL_S sealed as moderator` (the one red on the page; every button on the page is ink outline); acts = `open` (`/mod/queue`), `all` (`?all=1`), `log` (`/log`), `notice` (`/notice`), and a `sign out` item that is a tiny POST form styled as a link (`button.link`: the acts font, no border, no background). Cases render as stops on the dashed path, grouped by day with `byDay` like `/changes`, newest first, `?before=` paging as `more`:
+
+```
+<li id="case-<seq>" class="<status>[ redacted]">
+  <i class="n"></i> <time>          (existing stop chrome)
+  <span class="what">
+    <a class="where" href="<page url>">ns/slug</a> rev N [row n]
+    <details class="case">
+      <summary>the quote, or the reporter's note when there is no quote, or "(no quote)"; one line, ellipsized; struck through when the target is redacted</summary>
+      <dl>
+        <dt>text</dt><dd class="mono">the target's current text; for a redacted target, the kept original, labelled "kept privately, never served"</dd>
+        <dt>by</dt><dd>guest|sealed <author></dd>
+        <dt>reported</dt><dd>by <reporter> · reason · note (report cases only)</dd>
+        <dt>flag</dt><dd>cat slug · quote · model · time (when classified)</dd>
+      </dl>
+      <form method="post" action="/mod/queue">  hidden case=<seq>; buttons named action: resolve (open cases) · unredact (redacted targets) · redact (unredacted open cases) · restore (hidden pages) </form>
+      <a href="<page url>">open page</a> · <a href="<page url>/history">history</a>
+    </details>
+  </span>
+  <span class="facts"><span class="chip">report·other</span> or <span class="chip">auto·threat</span> · open|resolved|redacted</span>
+</li>
+```
+Drawers are closed by default. The mail's per-case link is `<base>/mod/queue#case-<seq>` (the mail body gains one such link per case line; `caseLine` itself stays as it is for the text queue). Empty queue: the existing `empty()` primitive with `no open cases.` and the action `see all`. Mobile: the drawer lives in the `.what` column so the existing `ol.path` grid rules apply; buttons wrap; nothing needs JavaScript; `details.case summary` gets the manual's disclosure triangle.
+
+**Reading a redacted target.** `Namespace.keptBody(slug, target)` returns the kept original for the moderator view only. It never appears in `.json`, `.jsonl`, text views, feeds or mail.
+
+**Actions.** `POST /mod/queue` (form) with `case=<seq>` and `action=` one of `resolve` (closes the case; log `resolve`), `unredact` (restores the case's target; log `unredact`), `redact` (redacts the case's target with `who = "moderator"`, feed `redact` record, log `redact`; resolves the case with action `redact`), `restore` (un-hides the page; log `restore`). Same internals and the same `/log` lines as the `?mod=` path; the target (ns, slug, rev, row) comes from the case row, never from the form. Then `303` to `/mod/queue#case-<seq>` (or `?all=1` when the request came from the all view). Missing cookie and key → `401`; unknown case → `404`.
+
+**Storage and env.** Nothing new in storage. No new env. CSS additions in `src/css.ts`: `details.case`, `.chip`, `button.link`, the `dl` inside a stop, all on the existing tokens.
+
+**Tests.** sign-in sets the cookie with HttpOnly, Secure, SameSite=Lax, Max-Age 30 days and redirects; wrong key 401 and no cookie; MOD_KEY unset → 404; cookie opens the queue in html, text and json; cookie does not authorize `?resolve=` or `?redact=` on a page URL; `POST /mod/queue` with the cookie resolves, redacts and unredacts and writes the same `/log` lines as the keyed path; without cookie or key → 401; sign-out clears the cookie; the html shows a `details` drawer per case with the kept original for a redacted target while `.json` never contains it; `#case-<seq>` ids present; the empty state renders; the mail carries `#case-<seq>` links; `robots.txt` has `Disallow: /mod`; every existing test stays green.
