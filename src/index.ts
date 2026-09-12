@@ -159,6 +159,8 @@ async function moderationQueue(ctx: Ctx): Promise<Response> {
   const { cases, before } = await firehose(ctx.env).listCases({ all: q.get("all") === "1", n: clampInt(q.get("n"), 50, 1, SIZE.reportMax), before: q.has("before") ? clampInt(q.get("before"), 0, 1, Number.MAX_SAFE_INTEGER) : undefined });
   if (ctx.fmt === "json") return json({ cases: cases.map((c) => ({ ...c, at: iso(c.at), resolved_at: c.resolved_at === null ? null : iso(c.resolved_at) })), before }, 200, WRITE);
   const lines = cases.map(caseLine);
+  // a human opens this from the case mail; a blank page reads as broken, so say what empty means
+  if (!lines.length) lines.push(q.get("all") === "1" ? "no cases yet." : "no open cases. add &all=1 to list resolved ones.");
   if (before !== null) {
     const more = new URLSearchParams(q);
     more.set("before", String(before));
