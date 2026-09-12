@@ -2,6 +2,9 @@ import { SELF, env, createExecutionContext, waitOnExecutionContext, runInDurable
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { renderMarkdown } from "../src/markdown";
+import { buildCaseMail, caseLine } from "../src/mail";
+import { sha256Hex } from "../src/crypto";
+import { queueView } from "../src/html";
 import type { Env } from "../src/types";
 
 const B = "https://gradient.wiki";
@@ -51,14 +54,14 @@ function client() {
   const tag = `m${n}`;
   const path = `/p/lobby/${tag}`;
   const get = (path: string, init: RequestInit & { headers?: Record<string, string> } = {}) =>
-    SELF.fetch(`${B}${path}`, { ...init, headers: { "cf-connecting-ip": ip, ...(init.headers ?? {}) } });
+    SELF.fetch(`${B}${path}`, { redirect: "manual", ...init, headers: { "cf-connecting-ip": ip, ...(init.headers ?? {}) } });
   const text = async (path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).text();
   const json = async <T>(path: string, init?: RequestInit & { headers?: Record<string, string> }) => (await get(path, init)).json<T>();
   const queue = async (all = false) => (await json<{ cases: Case[] }>(`/mod/queue.json?${MOD}&n=200${all ? "&all=1" : ""}`)).cases;
   const ownCases = async (all = false) => (await queue(all)).filter((c) => c.slug === tag);
-  const direct = async (path: string, vars: Partial<Env>, init: RequestInit = {}) => {
+  const direct = async (path: string, vars: Partial<Env>, init: RequestInit & { headers?: Record<string, string> } = {}) => {
     const ctx = createExecutionContext();
-    const res = await worker.fetch(new Request(`${B}${path}`, { ...init, headers: { "cf-connecting-ip": ip } }) as Request<unknown, IncomingRequestCfProperties>, { ...env, ...vars }, ctx);
+    const res = await worker.fetch(new Request(`${B}${path}`, { ...init, headers: { "cf-connecting-ip": ip, ...(init.headers ?? {}) } }) as Request<unknown, IncomingRequestCfProperties>, { ...env, ...vars }, ctx);
     return { res, done: () => waitOnExecutionContext(ctx) };
   };
   return { ip, tag, path, get, text, json, queue, ownCases, direct };
@@ -481,5 +484,304 @@ describe("case mail", () => {
   it("does not turn a report URL from a stranger into a clickable action", () => {
     const html = renderMarkdown(`[report](https://gradient.wiki/p/lobby/x?report=other) https://gradient.wiki/p/lobby/x?report=fraud`);
     expect(html).not.toContain("href=");
+  });
+});
+
+
+// Same client helper, with cookies passed explicitly on each request.
+const signIn = async (c: ReturnType<typeof client>) => {
+  const res = await c.get("/mod", { method: "POST", body: new URLSearchParams({ key: "test-mod-key" }) });
+  expect(res.status).toBe(303);
+  return res.headers.get("set-cookie")!.split(";")[0]!;
+};
+const queuePost = (c: ReturnType<typeof client>, seq: number, action: string, cookie = "", fields: Record<string, string> = {}) =>
+  c.get("/mod/queue", { method: "POST", headers: { cookie }, body: new URLSearchParams({ case: String(seq), action, ...fields }) });
+const reportCase = async (c: ReturnType<typeof client>, extra = "") => {
+  const result = await c.direct(`${c.path}.json?report=other${extra}`, {});
+  expect(result.res.status).toBe(200);
+  const receipt = await result.res.json<{ case: number }>();
+  await result.done();
+  return receipt.case;
+};
+
+describe("moderator sign-in and queue drawers", () => {
+  it("signs in with the exact derived cookie and clears it on sign out", async () => {
+    const c = client();
+    expect(await c.text("/mod")).toBe(`moderator sign-in is a browser form at ${B}/mod. agents use ?mod=<key>.\n`);
+    const form = await c.get("/mod", { headers: { accept: "text/html" } });
+    expect(form.status).toBe(200);
+    const markup = await form.text();
+    expect(markup).toContain('<input type="password" name="key" autocomplete="off" required>');
+    expect(markup).toContain('<button>sign in</button>');
+    expect(markup).not.toMatch(/<script>|<button class="seal"/);
+    const res = await c.get("/mod", { method: "POST", body: new URLSearchParams({ key: "test-mod-key" }) });
+    const token = await sha256Hex("gradient.wiki moderator cookie v1\ntest-mod-key");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/mod/queue");
+    expect(res.headers.get("set-cookie")).toBe(`mod=${token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax`);
+    expect(res.headers.get("set-cookie")).not.toContain("test-mod-key");
+    const out = await c.get("/mod", { method: "POST", body: new URLSearchParams({ signout: "1" }) });
+    expect(out.status).toBe(303);
+    expect(out.headers.get("location")).toBe("/");
+    expect(out.headers.get("set-cookie")).toBe("mod=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+    expect((await c.get("/mod/queue", { headers: { cookie: "mod=" } })).status).toBe(401);
+  });
+
+  it("rejects wrong keys, disabled moderation, forged cookies and rotated cookies", async () => {
+    const c = client();
+    const wrong = await c.get("/mod", { method: "POST", body: new URLSearchParams({ key: "wrong" }) });
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get("set-cookie")).toBeNull();
+    expect(await wrong.text()).toContain("that key did not open the door.");
+    for (const method of ["GET", "POST"]) {
+      const off = await c.direct("/mod", { MOD_KEY: "" }, { method });
+      expect(off.res.status).toBe(404);
+      expect(await off.res.text()).toBe("moderation is off on this host.\n");
+      await off.done();
+    }
+    const cookie = await signIn(c);
+    for (const key of ["", "rotated-test-key"]) {
+      const rotated = await c.direct("/mod/queue", { MOD_KEY: key }, { headers: { cookie } });
+      expect(rotated.res.status).toBe(401);
+      await rotated.done();
+    }
+    for (const cookie of ["mod=test-mod-key", "notmod=abc", "mod=wrong", `${await signIn(c)}; mod=wrong`]) {
+      expect((await c.get("/mod/queue", { headers: { cookie } })).status).toBe(401);
+    }
+    const unauth = await c.get("/mod/queue", { headers: { accept: "text/html" } });
+    expect(unauth.status).toBe(401);
+    expect(await unauth.text()).toContain("<button>sign in</button>");
+  });
+
+  it("opens the queue in every format without changing text or JSON bytes", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=queue+body`);
+    await classified("lobby", c.tag);
+    const seq = await reportCase(c, "&note=queue-note");
+    const cookie = await signIn(c);
+    for (const suffix of [".md", ".json", ".jsonl", ".rss", ""]) {
+      const path = `/mod/queue${suffix}?n=200&before=${seq + 1}`;
+      const keyed = await c.text(`${path}&${MOD}`);
+      const res = await c.get(path, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe(keyed);
+    }
+    for (const path of ["/mod/queue", "/mod/queue.html"]) {
+      const res = await c.get(path, { headers: { cookie, accept: "text/html" } });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain(`id="case-${seq}"`);
+      expect(html).toContain('<details class="case">');
+      expect(html).toContain("sealed as moderator");
+      expect(html.match(/class="seal-s"/g)).toHaveLength(1);
+      expect(html).toContain('<button class="link" name="signout" value="1">sign out</button>');
+      expect(html).not.toMatch(/<script>|<details class="case" open|<button class="seal"/);
+    }
+    const agent = await c.get("/mod/queue?view=agent", { headers: { cookie, accept: "text/html" } });
+    expect(agent.status).toBe(200);
+    expect(await agent.text()).toContain(`case ${seq} `);
+    expect((await c.get(`/mod/queue?${MOD}`, { headers: { accept: "text/html" } })).status).toBe(200);
+    const keyedAgent = await c.text(`/mod/queue?${MOD}&view=agent`, { headers: { accept: "text/html" } });
+    expect(keyedAgent).not.toMatch(/href="[^"]*(?:mod=|test-mod-key)/);
+  });
+
+  it("never lets a cookie authorize moderation or sealed writes on page URLs", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=unchanged+body`);
+    await classified("lobby", c.tag);
+    const seq = await reportCase(c);
+    const cookie = await signIn(c);
+    for (const action of [`resolve=${seq}`, "redact=1", "hide=1", "restore=1", "unredact=1"]) {
+      await c.get(`${c.path}?${action}`, { headers: { cookie } });
+      expect((await c.get(`${c.path}?mod=wrong&${action}`, { headers: { cookie } })).status).toBe(403);
+    }
+    expect(await c.text(c.path)).toBe("unchanged body");
+    expect((await c.ownCases())[0]!.status).toBe("open");
+    await c.get(`${c.path}?set=guest+write&by=admin`, { headers: { cookie } });
+    expect(await c.json(`${c.path}.json`)).toMatchObject({ sealed: false });
+  });
+
+  it("uses the case target for redact and unredact with the keyed log and feed lines", async () => {
+    const c = client();
+    const body = "only the older target\nline two <private>";
+    await c.get(`${c.path}?set=${encodeURIComponent(body)}`);
+    await classified("lobby", c.tag);
+    const seq = await reportCase(c, "&rev=1");
+    await c.get(`${c.path}?set=newer+body`);
+    await classified("lobby", c.tag);
+    const cookie = await signIn(c);
+    const redacted = await queuePost(c, seq, "redact", cookie, { ns: "wrong", slug: "wrong", rev: "2", row: "999", all: "1" });
+    expect(redacted.status).toBe(303);
+    expect(redacted.headers.get("location")).toBe(`/mod/queue?all=1#case-${seq}`);
+    expect(await c.text(`${c.path}?rev=1`)).toContain("[redacted by moderator ");
+    expect(await c.text(c.path)).toBe("newer body");
+    expect((await c.ownCases(true)).find((x) => x.seq === seq)).toMatchObject({ status: "resolved", action: "redact", resolved_by: "moderator" });
+    expect(await c.text("/log?n=100")).toContain(`lobby/${c.tag} redact rev 1\n`);
+    expect(await c.text("/changes?n=100")).toContain(`lobby/${c.tag} rev 1 redact by guest anon +0 redacted`);
+    const restored = await queuePost(c, seq, "unredact", cookie);
+    expect(restored.status).toBe(303);
+    expect(restored.headers.get("location")).toBe(`/mod/queue#case-${seq}`);
+    expect(await c.text(`${c.path}?rev=1`)).toBe(body);
+    expect(await c.text(c.path)).toBe("newer body");
+    const logLines = async () => (await c.json<{ log: Array<{ slug: string; action: string; reason: string }> }>("/log.json?n=100")).log
+      .filter((l) => l.slug === c.tag && ["redact", "unredact"].includes(l.action)).map(({ action, reason }) => ({ action, reason }));
+    const uiLines = await logLines();
+    await c.get(`${c.path}?${MOD}&redact=1`);
+    await c.get(`${c.path}?${MOD}&unredact=1`);
+    expect(uiLines).toEqual((await logLines()).slice(0, 2));
+  });
+
+  it("resolves and restores with matching log lines and allows key-only queue POST", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=restore+body`);
+    const seq = await reportCase(c);
+    const cookie = await signIn(c);
+    expect((await queuePost(c, seq, "resolve", cookie)).status).toBe(303);
+    expect((await c.ownCases(true)).find((x) => x.seq === seq)).toMatchObject({ status: "resolved", action: "resolve", resolved_by: "moderator" });
+    await c.get(`${c.path}?${MOD}&hide=1`);
+    expect(await c.text("/mod/queue?all=1", { headers: { cookie, accept: "text/html" } })).toContain('name="action" value="restore"');
+    const restored = await c.get(`/mod/queue?${MOD}&all=1`, { method: "POST", body: new URLSearchParams({ case: String(seq), action: "restore" }) });
+    expect(restored.status).toBe(303);
+    expect(restored.headers.get("location")).toBe(`/mod/queue?all=1#case-${seq}`);
+    expect(await c.json(`${c.path}.json`)).toMatchObject({ hidden: false });
+    const log = await c.text("/log?n=100");
+    expect(log).toContain(`lobby/${c.tag} resolve case ${seq}\n`);
+    expect(log).toContain(`lobby/${c.tag} restore\n`);
+    await c.get(`${c.path}?${MOD}&resolve=${seq}`);
+    await c.get(`${c.path}?${MOD}&restore=1`);
+    const keyed = await c.text("/log?n=100");
+    expect(keyed.split(`lobby/${c.tag} resolve case ${seq}\n`)).toHaveLength(3);
+    expect(keyed.split(`lobby/${c.tag} restore\n`)).toHaveLength(3);
+  });
+
+  it("rejects unauthorized actions, unknown cases and bad inputs without writes", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=keep+this`);
+    const seq = await reportCase(c);
+    const cookie = await signIn(c);
+    for (const action of ["resolve", "redact", "unredact", "restore"]) expect((await queuePost(c, seq, action)).status).toBe(401);
+    expect((await queuePost(c, 999999999, "resolve", cookie)).status).toBe(404);
+    for (const seq of [0, -1, 1.5, NaN]) expect((await queuePost(c, seq, "resolve", cookie)).status).toBe(400);
+    expect((await queuePost(c, seq, "hide", cookie)).status).toBe(400);
+    expect((await c.get(`/mod/queue?case=${seq}&action=redact`, { headers: { cookie } })).status).toBe(200);
+    expect(await c.text(c.path)).toBe("keep this");
+    expect((await c.ownCases())[0]!.status).toBe("open");
+  });
+
+  it("keeps originals only in moderator HTML and escapes drawer content with one red mark", async () => {
+    const c = client();
+    const body = "PRIVATE-ORIGINAL-" + c.tag + "\n<script>bad()</script>";
+    await c.get(`${c.path}?${MOD}&set=${encodeURIComponent(body)}&by=house`);
+    await classified("lobby", c.tag);
+    const seq = await reportCase(c, "&note=%3Cimg%20src=x%3E&by=%3Cb%3Ereporter%3C%2Fb%3E");
+    const cookie = await signIn(c);
+    await queuePost(c, seq, "redact", cookie);
+    const html = await c.text(`/mod/queue?all=1&n=200`, { headers: { cookie, accept: "text/html" } });
+    expect(html).toContain(`<li id="case-${seq}" class="resolved redacted">`);
+    expect(html).toContain('<summary>&lt;img src=x&gt;</summary>');
+    expect(html).toContain("kept privately, never served");
+    expect(html).toContain(`PRIVATE-ORIGINAL-${c.tag}\n&lt;script&gt;bad()&lt;/script&gt;`);
+    expect(html).toContain("<dt>by</dt><dd>sealed house</dd>");
+    expect(html).toContain("by &lt;b&gt;reporter&lt;/b&gt;");
+    expect(html.match(/class="seal-s"/g)).toHaveLength(1);
+    expect(html).not.toContain('<script>');
+    for (const path of [`/mod/queue.json?all=1`, `/mod/queue?all=1`, `${c.path}.json`, `${c.path}.md`, `${c.path}/history.json`, "/p/lobby.jsonl", "/p/lobby.rss", "/changes.rss", "/log"]) {
+      const res = await c.get(path, { headers: { cookie } });
+      const text = new TextDecoder().decode(await res.arrayBuffer());
+      expect(text).not.toContain(`PRIVATE-ORIGINAL-${c.tag}`);
+      expect(text).not.toContain("kept_body");
+    }
+    const own = await env.FIREHOSE.get(env.FIREHOSE.idFromName("firehose")).getCase(seq);
+    const mail = buildCaseMail([own!], { publicUrl: B, to: "owner@example.com", now: Date.now() });
+    expect(mail.raw).not.toContain(`PRIVATE-ORIGINAL-${c.tag}`);
+  });
+
+  it("renders row evidence, flags, action states and paging without exposing keys", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=page+body`);
+    await classified("lobby", c.tag);
+    await c.get(`${c.path}?add=row+original&id=stable&by=row-writer`);
+    await classified("lobby", c.tag, true);
+    const seq = await reportCase(c, "&row=1");
+    const stub = env.NAMESPACE.get(env.NAMESPACE.idFromName("lobby"));
+    // reportCase waits for policy work before this test sets the metadata.
+    await stub.flag(c.tag, { row: 1 }, { cat: 3, quote: "row quote", model: "test-model", at: Date.now() });
+    const cookie = await signIn(c);
+    await queuePost(c, seq, "redact", cookie);
+    const html = await c.text(`/mod/queue?all=1&n=1&${MOD}`, { headers: { accept: "text/html" } });
+    expect(html).toContain(`rev 2 row 1<details class="case">`);
+    expect(html).toContain("row original");
+    expect(html).toContain("guest</span> row-writer");
+    expect(html).toContain("threat · row quote · test-model");
+    expect(html).toContain('name="action" value="unredact"');
+    expect(html).not.toContain('name="action" value="redact"');
+    expect(html).not.toContain('name="action" value="resolve"');
+    expect(html).toContain('name="all" value="1"');
+    expect(html).toContain("all=1&amp;n=1&amp;before=");
+    expect(html).not.toContain("test-mod-key");
+    expect(await stub.keptBody(c.tag, { rev: 2 })).toBe("row original");
+    await queuePost(c, seq, "unredact", cookie);
+    expect(await c.json(`${c.path}.json`)).toMatchObject({ body: "page body", rows: [{ body: "row original", id: "stable", redacted: false }] });
+    expect(await c.text("/log?n=100")).toContain(`lobby/${c.tag} redact row 1\n`);
+    expect(await c.text("/log?n=100")).toContain(`lobby/${c.tag} unredact rev 2\n`);
+  });
+
+  it("handles private cases without publishing logs, feeds or namespace names", async () => {
+    const c = client();
+    const ns = `ui-${c.tag}`;
+    const { key } = await c.json<{ key: string }>(`/ns/new.json?name=${ns}&private=1`);
+    const path = `/p/${ns}/${c.tag}`;
+    await c.get(`${path}?key=${key}&set=private+case+body`);
+    const { case: seq } = await c.json<{ case: number }>(`${path}.json?key=${key}&report=other`);
+    const cookie = await signIn(c);
+    expect((await queuePost(c, seq, "redact", cookie)).status).toBe(303);
+    expect(await c.text("/mod/queue?all=1", { headers: { cookie, accept: "text/html" } })).toContain("private case body");
+    expect((await queuePost(c, seq, "unredact", cookie)).status).toBe(303);
+    expect(await c.text(`${path}?key=${key}`)).toBe("private case body");
+    for (const action of ["resolve", "restore"]) expect((await queuePost(c, seq, action, cookie)).status).toBe(303);
+    for (const path of ["/log?n=100", "/changes?n=100", "/sitemap.xml"]) expect(await c.text(path)).not.toContain(ns);
+  });
+
+  it("renders the empty primitive and mails one plain fragment link per case", async () => {
+    const c = client();
+    const empty = queueView(B, [], 0, null, new URLSearchParams());
+    expect(empty).toContain('class="empty"');
+    expect(empty).toContain("no open cases.");
+    expect(empty).toContain('<a href="/mod/queue?all=1">see all</a>');
+    const cookie = await signIn(c);
+    const emptyPage = await c.text("/mod/queue?before=1", { headers: { cookie, accept: "text/html" } });
+    expect(emptyPage).toContain('<div class="empty">');
+    expect(emptyPage).toContain("no open cases.");
+    expect(await c.text("/mod/queue?before=1", { headers: { cookie } })).toBe("no open cases. add &all=1 to list resolved ones.\n");
+    expect(await c.text("/mod/queue?before=1&all=1", { headers: { cookie } })).toBe("no cases yet.\n");
+    expect(await c.text("/mod/queue.json?before=1", { headers: { cookie } })).toBe(JSON.stringify({ cases: [], before: null }, null, 1) + "\n");
+    await c.get(`${c.path}?set=mail+body`);
+    const seq = await reportCase(c);
+    const seq2 = await reportCase(c);
+    const fh = env.FIREHOSE.get(env.FIREHOSE.idFromName("firehose"));
+    const cases = [(await fh.getCase(seq))!, (await fh.getCase(seq2))!];
+    const mail = buildCaseMail(cases, { publicUrl: `${B}/`, to: "owner@example.com", now: Date.now() });
+    for (const entry of cases) {
+      expect(mail.raw).toContain(`${caseLine(entry)}\n→ ${B}/mod/queue#case-${entry.seq}`);
+      expect(mail.raw.split(`#case-${entry.seq}`).length - 1).toBe(1);
+      expect(caseLine(entry)).not.toContain("/mod/queue");
+    }
+    expect(mail.raw).not.toContain("?mod=");
+  });
+
+  it("marks all /mod responses noindex and disallows the whole prefix in robots", async () => {
+    const c = client();
+    const cookie = await signIn(c);
+    for (const path of ["/mod", "/mod/queue", "/mod/queue.json", "/mod/unknown", "/moderator-unknown"]) {
+      for (const method of ["GET", "HEAD", "OPTIONS", "DELETE", "PUT"]) {
+        const res = await c.get(path, { method, headers: { cookie } });
+        expect(res.headers.get("x-robots-tag"), `${method} ${path}`).toBe("noindex, nofollow");
+      }
+    }
+    const redirect = await c.direct("/mod", {}, { headers: { "cf-visitor": '{"scheme":"http"}' } });
+    expect(redirect.res.status).toBe(301);
+    expect(redirect.res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    await redirect.done();
+    expect(await c.text("/robots.txt")).toContain("Disallow: /mod\n");
   });
 });
