@@ -8,3 +8,4 @@ dist/
 .DS_Store
 _tmp_context/
 FABLE_CONTEXT_PACK.md
+.claude/
