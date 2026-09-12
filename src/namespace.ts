@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Beat, Env, ExportLine, ModAction, Page, PageSummary, RedactResult, Revision, Row, WriteResult } from "./types";
+import type { Beat, Env, ExportLine, PolicyTarget, PolicyPost, PolicyFlag, ModAction, Page, PageSummary, RedactResult, Revision, Row, WriteResult } from "./types";
 import { buildInboxMail, sendInboxMail } from "./mail";
 import { constantTimeEqual, randomToken, sha256Hex } from "./crypto";
 
@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS beats (slug TEXT NOT NULL, runid TEXT NOT NULL, at IN
 
 // Columns added after the first schema; brings a pre-existing local database up to date.
 const LATER_COLUMNS: Record<string, Record<string, string>> = {
-  revisions: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
-  rows: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER" },
+  revisions: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER", flag_cat: "INTEGER", flag_quote: "TEXT", flag_model: "TEXT", flag_at: "INTEGER", kept_body: "TEXT" },
+  rows: { undo_hash: "TEXT", undo_expires: "INTEGER", redacted_at: "INTEGER", flag_cat: "INTEGER", flag_quote: "TEXT", flag_model: "TEXT", flag_at: "INTEGER", kept_body: "TEXT" },
 };
 
 interface Meta {
@@ -305,8 +305,58 @@ export class Namespace extends DurableObject<Env> {
   }
 
   /** Moderator path: same effect as undo, no token, no expiry. */
-  redact(slug: string, target: { rev: number } | { row: number }): RedactResult {
-    return "rev" in target ? this.redactRevision(slug, target.rev, "moderator") : this.redactRow(slug, target.row, "moderator");
+  redact(slug: string, target: PolicyTarget, who = "moderator"): RedactResult {
+    return "rev" in target ? this.redactRevision(slug, target.rev, who) : this.redactRow(slug, target.row, who);
+  }
+
+  policyTarget(slug: string, target?: PolicyTarget): PolicyPost | null {
+    const rev = target && "rev" in target ? target.rev : this.pageRec(slug)?.rev;
+    if (target && "row" in target) {
+      const row = this.sql.exec<{ rev: number; n: number; author: string; body: string; redacted_at: number | null }>(
+        "SELECT rev, n, author, body, redacted_at FROM rows WHERE slug = ? AND n = ?", slug, target.row).toArray()[0];
+      return row ? { rev: row.rev, row: row.n, by: row.author, note: `row ${row.n}`, body: row.body, redacted: row.redacted_at !== null } : null;
+    }
+    if (rev === undefined) return null;
+    const r = this.sql.exec<{ kind: string; body: string | null; author: string; note: string; redacted_at: number | null }>(
+      "SELECT kind, body, author, note, redacted_at FROM revisions WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
+    if (!r) return null;
+    if (r.kind === "add") {
+      const row = this.sql.exec<{ n: number }>("SELECT n FROM rows WHERE slug = ? AND rev = ?", slug, rev).toArray()[0];
+      return row ? this.policyTarget(slug, { row: row.n }) : null;
+    }
+    return { rev, row: null, by: r.author, note: r.note, body: r.body ?? "", redacted: r.redacted_at !== null };
+  }
+
+  flag(slug: string, target: PolicyTarget, flag: PolicyFlag): void {
+    const post = this.policyTarget(slug, target);
+    if (!post) return;
+    const table = post.row === null ? "revisions" : "rows";
+    const key = post.row === null ? "rev" : "n";
+    this.sql.exec(`UPDATE ${table} SET flag_cat = ?, flag_quote = ?, flag_model = ?, flag_at = ? WHERE slug = ? AND ${key} = ?`,
+      flag.cat, flag.quote?.slice(0, 300) ?? null, flag.model, flag.at, slug, post.row ?? post.rev);
+  }
+
+  unredact(slug: string, target: PolicyTarget): { rev: number; row: number | null } | null {
+    const post = this.policyTarget(slug, target);
+    if (!post) return null;
+    const table = post.row === null ? "revisions" : "rows";
+    const key = post.row === null ? "rev" : "n";
+    const kept = this.sql.exec<{ kept_body: string | null }>(`SELECT kept_body FROM ${table} WHERE slug = ? AND ${key} = ?`, slug, post.row ?? post.rev).one();
+    // A missing original cannot be restored without inventing evidence.
+    if (post.redacted && kept.kept_body === null) return null;
+    if (post.redacted) {
+      this.sql.exec(`UPDATE ${table} SET body = kept_body, redacted_at = NULL WHERE slug = ? AND ${key} = ?`, slug, post.row ?? post.rev);
+      this.sql.exec("UPDATE revisions SET bytes = ?, redacted_at = NULL WHERE slug = ? AND rev = ?", kept.kept_body!.length, slug, post.rev);
+      if (post.row === null) this.refreshBody(slug);
+    }
+    return { rev: post.rev, row: post.row };
+  }
+
+  private refreshBody(slug: string): void {
+    // Policy markers remain visible; author and moderator redactions fall back to an earlier body.
+    const current = this.sql.exec<{ body: string }>(
+      "SELECT body FROM revisions WHERE slug = ? AND kind = 'set' AND (redacted_at IS NULL OR body LIKE '[redacted by policy %') ORDER BY rev DESC LIMIT 1", slug).toArray()[0];
+    this.sql.exec("UPDATE pages SET body = ? WHERE slug = ?", current?.body ?? "", slug);
   }
 
   /** Expires every outstanding undo token on a page. Used by tests and operators. */
@@ -327,15 +377,9 @@ export class Namespace extends DurableObject<Env> {
     if (r.redacted_at !== null) return { kind: "already", rev, row: null, by: r.author };
     const now = Date.now();
     this.sql.exec(
-      "UPDATE revisions SET body = ?, bytes = 0, redacted_at = ? WHERE slug = ? AND rev = ?",
+      "UPDATE revisions SET kept_body = body, body = ?, bytes = 0, redacted_at = ? WHERE slug = ? AND rev = ?",
       redactionMarker(who, now), now, slug, rev);
-    const latestSet = this.sql.exec<{ rev: number }>("SELECT rev FROM revisions WHERE slug = ? AND kind = 'set' ORDER BY rev DESC LIMIT 1", slug).toArray()[0];
-    if (latestSet?.rev === rev) {
-      const fallback = this.sql
-        .exec<{ body: string }>("SELECT body FROM revisions WHERE slug = ? AND kind = 'set' AND redacted_at IS NULL ORDER BY rev DESC LIMIT 1", slug)
-        .toArray()[0];
-      this.sql.exec("UPDATE pages SET body = ? WHERE slug = ?", fallback?.body ?? "", slug);
-    }
+    this.refreshBody(slug);
     return { kind: "redacted", rev, row: null, by: r.author };
   }
 
@@ -346,7 +390,7 @@ export class Namespace extends DurableObject<Env> {
     if (!r) return { kind: "missing" };
     if (r.redacted_at !== null) return { kind: "already", rev: r.rev, row: n, by: r.author };
     const now = Date.now();
-    this.sql.exec("UPDATE rows SET body = ?, redacted_at = ? WHERE slug = ? AND n = ?", redactionMarker(who, now), now, slug, n);
+    this.sql.exec("UPDATE rows SET kept_body = body, body = ?, redacted_at = ? WHERE slug = ? AND n = ?", redactionMarker(who, now), now, slug, n);
     this.sql.exec("UPDATE revisions SET bytes = 0, redacted_at = ? WHERE slug = ? AND rev = ?", now, slug, r.rev);
     return { kind: "redacted", rev: r.rev, row: n, by: r.author };
   }

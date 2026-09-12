@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
-// One Durable Object per bucket key (a salted IP hash, a key hash, or a namespace name).
+// One Durable Object per bucket: ip:/rep: salted hashes, key: hashes, or ns: names.
+// Reports use their own hour window so ordinary writes do not consume the report allowance.
 // Sliding window kept in memory: the object is evicted after idle time and the window
 // resets with it, which is the right failure mode for a rate limit. Nothing is persisted,
 // so no IP-derived value ever touches storage.

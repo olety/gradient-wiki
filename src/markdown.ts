@@ -62,7 +62,7 @@ export function renderMarkdown(src: string): string {
 
 // A URL that would write or undo on this site is never turned into a link: a crawler or a
 // preview bot following it must not be able to act on someone's behalf.
-const ACTING_URL = /[?&](set|add|beat|undo|mod)=/i;
+const ACTING_URL = /[?&](set|add|beat|undo|mod|report)=/i;
 
 function safeHref(href: string): string | null {
   const h = href.trim();

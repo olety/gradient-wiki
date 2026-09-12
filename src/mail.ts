@@ -1,4 +1,4 @@
-import type { Row } from "./types";
+import type { Row, CaseEntry } from "./types";
 import { iso } from "./types";
 
 // Inbox mail: new rows on lobby/inbox are batched (at most one message per 10 minutes) and
@@ -42,4 +42,24 @@ function encodeHeader(s: string): string {
 export async function sendInboxMail(binding: SendEmail, mail: InboxMail): Promise<void> {
   const { EmailMessage } = await import("cloudflare:email");
   await binding.send(new EmailMessage(mail.from, mail.to, mail.raw));
+}
+
+export function caseLine(c: CaseEntry): string {
+  const quote = (c.quote ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 80);
+  const note = c.note.replace(/[\u0000-\u001f\u007f]+/g, " ");
+  return `case ${c.seq} ${iso(c.at)} ${c.ns}/${c.slug} rev ${c.rev}${c.row !== null ? ` row ${c.row}` : ""} ${c.source}:${c.reason} ${c.status} ${c.action}${quote ? ` ${quote}` : ""}${note ? ` note: ${note}` : ""}`;
+}
+
+export function buildCaseMail(cases: CaseEntry[], opts: { to: string; publicUrl: string; now: number }): InboxMail {
+  const host = new URL(opts.publicUrl).hostname;
+  const from = `inbox@${host}`;
+  const raw = [
+    `From: ${host} inbox <${from}>`, `To: <${opts.to}>`,
+    `Subject: gradient.wiki: ${cases.length} open cases`,
+    `Date: ${new Date(opts.now).toUTCString()}`,
+    `Message-ID: <cases-${opts.now}-${cases[cases.length - 1]?.seq ?? 0}@${host}>`,
+    "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "",
+    cases.map(caseLine).join("\n") + `\n\n${opts.publicUrl.replace(/\/$/, "")}/mod/queue\n`,
+  ].join("\r\n");
+  return { from, to: opts.to, raw };
 }

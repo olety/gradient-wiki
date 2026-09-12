@@ -1,12 +1,16 @@
 import { Namespace } from "./namespace";
 import { Firehose } from "./firehose";
 import { Limiter } from "./limiter";
-import type { Change, Env, ModAction, Page, RedactResult } from "./types";
+import type { Change, Env, ModAction, Page, RedactResult, PolicyTarget } from "./types";
 import { iso } from "./types";
 import { manual } from "./manual";
 import * as views from "./html";
 import { rss, sitemap } from "./rss";
 import { looksLikeSecret } from "./secrets";
+import { notice, NOTICE_CATEGORIES, NOTICE_UPDATED } from "./notice";
+import { blockedLinkHost } from "./link-screen";
+import { classify, decide, POLICY_MODEL, type Verdict } from "./policy";
+import { caseLine } from "./mail";
 import { unifiedDiff } from "./diff";
 import { parseFrontMatter } from "./frontmatter";
 import { constantTimeEqual, randomHex, sha256Hex } from "./crypto";
@@ -16,17 +20,19 @@ export { Namespace, Firehose, Limiter };
 // ---- constants (mirrors SPEC.md) --------------------------------------------------------------
 
 const NS_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const RESERVED_NS = new Set(["new", "alive", "changes", "log", "p", "ns", "time", "manual"]);
+const RESERVED_NS = new Set(["new", "alive", "changes", "log", "p", "ns", "time", "manual", "notice", "mod"]);
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$/;
-const ACTIONS = new Set(["history", "diff", "edit"]);
+const ACTIONS = new Set(["history", "diff", "edit", "report"]);
 /** The Perl UseModWiki script paths. One grammar on all four; every request is rewritten onto the lobby's normal routes. */
 const USEMOD_PATHS = new Set(["/wiki.pl", "/wiki.cgi", "/cgi-bin/wiki.pl", "/cgi-bin/wiki.cgi"]);
 const SIZE = {
   getWrite: 16 * 1024, bodyWrite: 1024 * 1024, by: 64, note: 200, id: 64, runid: 64, waitMax: 25, pageMax: 100, listMax: 200,
-  sitemap: 5000, exportBatch: 25, exportMax: 50 * 1024 * 1024,
+  sitemap: 5000, exportBatch: 25, exportMax: 50 * 1024 * 1024, reportMax: 200,
 };
-const RATE = { ipWrite: 30, keyWrite: 120, nsWrite: 600, ipRead: 600 };
+const RATE = { ipWrite: 30, keyWrite: 120, nsWrite: 600, ipRead: 600, report: 10 };
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const REPORT_REASONS = new Set<string>(NOTICE_CATEGORIES);
 const ROBOTS = `User-agent: *
 Allow: /
 Disallow: /*?set=
@@ -38,6 +44,9 @@ Disallow: /*&beat=
 Disallow: /*?undo=
 Disallow: /*&undo=
 Disallow: /*/edit
+Disallow: /*?report=
+Disallow: /*&report=
+Disallow: /*/report
 Disallow: /ns/new
 Disallow: /wiki.pl?action=edit
 Disallow: /wiki.cgi?action=edit
@@ -60,14 +69,15 @@ interface Ctx {
   base: string;
   fmt: Format;
   ip: string;
+  execution?: ExecutionContext;
 }
 
 // ---- entry ------------------------------------------------------------------------------------
 
 export default {
-  async fetch(req, env): Promise<Response> {
+  async fetch(req: Request, env: Env, execution?: ExecutionContext): Promise<Response> {
     try {
-      return await route(req, env);
+      return await route(req, env, execution);
     } catch (e) {
       console.error(e);
       return fail(500, "something broke on our side. try again in a moment.");
@@ -75,7 +85,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function route(req: Request, env: Env): Promise<Response> {
+async function route(req: Request, env: Env, execution?: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const m = /^(.*?)\.(md|json|jsonl|html|rss)$/.exec(url.pathname);
   const path = m ? m[1]! : url.pathname;
@@ -86,6 +96,7 @@ async function route(req: Request, env: Env): Promise<Response> {
     base: (env.PUBLIC_URL || url.origin).replace(/\/$/, ""),
     fmt: suffix ?? (wantsHtml ? "html" : "md"),
     ip: req.headers.get("cf-connecting-ip") ?? "anon",
+    execution,
   };
 
   // One address for everything: plain http and the www host are sent to https on the apex, permanently.
@@ -105,6 +116,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (path === "/robots.txt") return text(`${ROBOTS}Sitemap: ${ctx.base}/sitemap.xml\n`);
   if (path === "/sitemap.xml") return sitemapRoute(ctx);
   if (path === "/.well-known/gradient-wiki") return json(declaration(ctx));
+  if (path === "/notice") return noticeRoute(ctx);
+  if (path === "/mod/queue") return moderationQueue(ctx);
   if (path === "/changes") return changes(ctx);
   if (path === "/log") return log(ctx);
   if (path === "/ns/new" || (path === "/ns" && req.method === "POST")) return nsNew(ctx);
@@ -126,10 +139,32 @@ function declaration(ctx: Ctx) {
     accepts_writes_via: ["GET query string", "POST", "PUT"],
     note: "This host accepts writes over GET on purpose. If your sandbox assumes GET is read-only, block this domain.",
     manual: `${ctx.base}/manual`,
+    notice: `${ctx.base}/notice`,
+    report: `${ctx.base}/p/<ns>/<slug>?report=<reason>`,
     changes: `${ctx.base}/changes`,
     source: ctx.env.SOURCE_URL,
     license: "MIT",
   };
+}
+
+function noticeRoute(ctx: Ctx): Response {
+  if (ctx.fmt === "json") return json({ url: `${ctx.base}/notice`, updated: NOTICE_UPDATED, categories: NOTICE_CATEGORIES });
+  const body = notice(ctx.env, ctx.base);
+  return ctx.fmt === "html" ? html(views.noticeView(ctx.base, body)) : markdown(body);
+}
+
+async function moderationQueue(ctx: Ctx): Promise<Response> {
+  const q = ctx.url.searchParams;
+  if (!ctx.env.MOD_KEY || !constantTimeEqual(q.get("mod") ?? "", ctx.env.MOD_KEY)) return fail(401, "moderation key needed. add ?mod=<key>.");
+  const { cases, before } = await firehose(ctx.env).listCases({ all: q.get("all") === "1", n: clampInt(q.get("n"), 50, 1, SIZE.reportMax), before: q.has("before") ? clampInt(q.get("before"), 0, 1, Number.MAX_SAFE_INTEGER) : undefined });
+  if (ctx.fmt === "json") return json({ cases: cases.map((c) => ({ ...c, at: iso(c.at), resolved_at: c.resolved_at === null ? null : iso(c.resolved_at) })), before }, 200, WRITE);
+  const lines = cases.map(caseLine);
+  if (before !== null) {
+    const more = new URLSearchParams(q);
+    more.set("before", String(before));
+    lines.push(`more: ${ctx.base}/mod/queue?${more}`);
+  }
+  return text(lines.join("\n") + "\n", 200, WRITE);
 }
 
 async function front(ctx: Ctx): Promise<Response> {
@@ -145,7 +180,7 @@ async function agentSide(ctx: Ctx, path: string): Promise<Response> {
   const q = new URLSearchParams(ctx.url.searchParams);
   q.delete("view");
   const qs = q.toString();
-  const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip } }), ctx.env);
+  const res = await route(new Request(`${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`, { headers: { "cf-connecting-ip": ctx.ip } }), ctx.env, ctx.execution);
   const human = `${ctx.base}${path}${qs ? `?${qs}` : ""}`;
   return html(views.agentView(ctx.base, human, await res.text(), res.ok), res.status, WRITE);
 }
@@ -276,6 +311,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   const pageUrl = `${ctx.base}/p/${ns}/${slug}`;
 
   if (p.has("mod")) return moderate(ctx, stub, ns, slug, p, pageUrl, isPrivate);
+  if (p.has("report")) return report(ctx, stub, ns, slug, p, pageUrl, isPrivate, keyHash);
 
   if (p.has("undo")) {
     const limited = await writeGate(ctx, ns, keyHash);
@@ -295,6 +331,11 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     return write(ctx, stub, ns, slug, intent, p, pageUrl, isPrivate);
   }
 
+  if (action === "report") {
+    if (ctx.req.method !== "GET" && ctx.req.method !== "HEAD") return fail(400, `submit reports to ${pageUrl}.`);
+    if (!(await stub.get(slug))) return fail(404, `no page ${ns}/${slug}.`);
+    return html(views.reportFormView(ctx.base, ns, slug, keyHash ? p.get("key") : undefined), 200, WRITE);
+  }
   if (action === "edit") return html(views.editView(ctx.base, ns, slug, await stub.get(slug), !open), 200, WRITE);
   if (action === "history") {
     const revs = await stub.history(slug);
@@ -352,6 +393,12 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
   if (value.length === 0) return fail(400, `${intent} needs at least 1 character.`);
   if (value.length > max) return fail(413, `too large: ${value.length} chars, max ${max} ${viaBody ? "per PUT/POST" : "per GET write (use PUT or POST for up to 1 MB)"}.`);
 
+  const blocked = await blockedLinkHost(value, new URL(ctx.base).hostname, ctx.env);
+  if (blocked) {
+    if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "refuse", reason: `${ns}/${slug}: ${blocked}` });
+    return fail(403, `refused: link to ${blocked} is on a malware or phishing blocklist. see ${ctx.base}/notice`);
+  }
+
   const note = clean(p.get("note") ?? "", SIZE.note);
   const result = intent === "set"
     ? await stub.set(slug, value, by, note)
@@ -374,7 +421,11 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
           note: result.kind === "added" ? `row ${result.n}` : note,
         });
       }
-      // No policing: a write that looks like a credential is saved and warned about. The undo
+      if (!isPrivate) {
+        const target = result.kind === "saved" ? { rev: result.rev } : { row: result.n };
+        defer(ctx, runPolicy(ctx.env, { ns, slug, target, trigger: "write", reason: null }));
+      }
+      // A credential-looking write is saved and warned about. The undo
       // link on every receipt is how the author takes it back (redacts it) within 24 hours.
       const warning = looksLikeSecret(value);
       const undo = `${pageUrl}?undo=${result.undo}`;
@@ -384,6 +435,65 @@ async function write(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, s
       const fields = result.kind === "saved" ? { rev: result.rev } : { rev: result.rev, n: result.n };
       return receipt(ctx, result.kind, { ...fields, ...(warning ? { warning } : {}), undo }, lines);
     }
+  }
+}
+
+async function report(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, slug: string, p: Map<string, string>, pageUrl: string, isPrivate: boolean, keyHash: string | null): Promise<Response> {
+  const reason = p.get("report") ?? "";
+  if (!REPORT_REASONS.has(reason)) return fail(400, `report needs ?report=<reason>: ${[...REPORT_REASONS].join(" ")}`);
+  const rev = p.get("rev") || undefined;
+  const row = p.get("row") || undefined;
+  if ((rev && row) || [rev, row].some((x) => x !== undefined && (!Number.isSafeInteger(Number(x)) || Number(x) < 1))) return fail(400, "report needs &rev=N or &row=N, a positive integer, not both.");
+  const target = row ? { row: Number(row) } : rev ? { rev: Number(rev) } : undefined;
+  const post = await stub.policyTarget(slug, target);
+  if (!post) return fail(404, `no such revision or row on ${ns}/${slug}.`);
+  const limited = await writeGate(ctx, ns, keyHash);
+  if (limited) return limited;
+  const bucket = (await ipBucket(ctx)).replace(/^ip:/, "rep:");
+  const over = await limit(ctx.env, bucket, RATE.report, HOUR);
+  if (over) return tooMany(over, "10 reports per hour");
+  const seq = await firehose(ctx.env).openCase({ at: Date.now(), ns, slug, rev: post.rev, row: post.row, source: "report", reason,
+    note: clean(p.get("note") ?? "", SIZE.note), by: clean(p.get("by") ?? "", SIZE.by) || "anon", cat: null, quote: null });
+  if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "report", reason: `rev ${post.rev}: ${reason}` });
+  defer(ctx, runPolicy(ctx.env, { ns, slug, target: post.row === null ? { rev: post.rev } : { row: post.row }, trigger: "report", reason, caseSeq: seq }));
+  const what = post.row === null ? `rev ${post.rev}` : `row ${post.row} rev ${post.rev}`;
+  return receipt(ctx, "reported", { case: seq, rev: post.rev, row: post.row, url: pageUrl }, [`reported ${what} ${pageUrl} case ${seq}`, `notice: ${ctx.base}/notice`]);
+}
+
+function defer(ctx: Ctx, work: Promise<void>): void {
+  const guarded = work.catch(() => console.error("policy work failed; saved text and cases are retained"));
+  ctx.execution?.waitUntil(guarded);
+}
+
+async function runPolicy(env: Env, q: { ns: string; slug: string; target: PolicyTarget; trigger: "write" | "report"; reason: string | null; caseSeq?: number }): Promise<void> {
+  const stub = namespace(env, q.ns);
+  const info = await stub.info();
+  const post = await stub.policyTarget(q.slug, q.target);
+  if (!post) return;
+  const localSecret = q.trigger === "report" && q.reason === "secret";
+  const verdict: Verdict = localSecret
+    ? looksLikeSecret(post.body) ? { verdict: "VIOLATION", category: 0, quote: null } : { verdict: "OK", category: null, quote: null }
+    : await classify(env, { ns: q.ns, slug: q.slug, ...post, reason: q.reason });
+  const decision = decide(q.trigger, verdict, q.reason);
+  const cat = verdict.verdict === "error" ? null : verdict.verdict === "OK" ? 0 : verdict.category;
+  const quote = verdict.verdict === "VIOLATION" ? verdict.quote : null;
+  if (!localSecret && cat !== null) await stub.flag(q.slug, q.target, { cat, quote, model: env.POLICY_MODEL || POLICY_MODEL, at: Date.now() });
+  const fh = firehose(env);
+  if (q.caseSeq !== undefined) await fh.flagCase(q.caseSeq, localSecret ? null : cat, quote);
+  if (decision.action === "none") return;
+  if (decision.action === "redact") {
+    const r = await stub.redact(q.slug, q.target, `policy ${decision.reason}`);
+    if (!("rev" in r)) return;
+    if (r.kind === "redacted" && !info.private) {
+      await fh.record({ at: Date.now(), ns: q.ns, slug: q.slug, rev: r.rev, kind: "redact", by: r.by, bytes: 0, note: r.row === null ? "redacted" : `row ${r.row} redacted` });
+      await fh.logAction({ at: Date.now(), ns: q.ns, slug: q.slug, action: "policy-redact", reason: `rev ${r.rev}: ${decision.reason}` });
+    }
+    if (q.caseSeq !== undefined) await fh.resolveCase(q.caseSeq, q.ns, q.slug, "policy", "redact");
+  }
+  if (q.caseSeq === undefined) {
+    await fh.openCase({ at: Date.now(), ns: q.ns, slug: q.slug, rev: post.rev, row: post.row, source: "auto",
+      reason: decision.action === "redact" ? decision.reason : "defamation", note: "", by: post.by, cat, quote,
+      status: decision.action === "redact" ? "resolved" : "open", action: decision.action === "redact" ? "redact" : "none" });
   }
 }
 
@@ -405,6 +515,24 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
   // an ops action, not moderation of content, so it is not logged: send the inbox mail now
   if (p.get("mail") === "1") return receipt(ctx, "mailed", { rows: await stub.flushInboxMail() }, [`mailed ${await stub.mailState().then((s) => s.mailedN)} inbox rows so far ${pageUrl}`]);
 
+  if (p.has("resolve")) {
+    const seq = Number(p.get("resolve"));
+    if (!Number.isSafeInteger(seq) || seq < 1) return fail(400, "resolve needs &resolve=<case>.");
+    if (!(await firehose(ctx.env).resolveCase(seq, ns, slug))) return fail(404, `no such case on ${ns}/${slug}.`);
+    if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "resolve", reason: `case ${seq}` });
+    return receipt(ctx, "resolved", { case: seq }, [`resolved case ${seq} ${pageUrl}`]);
+  }
+
+  if (p.has("unredact") || p.has("unredactrow")) {
+    const target: PolicyTarget = p.has("unredact") ? { rev: Number(p.get("unredact")) } : { row: Number(p.get("unredactrow")) };
+    const n = "rev" in target ? target.rev : target.row;
+    if (!Number.isSafeInteger(n) || n < 1) return fail(400, "unredact needs &unredact=<rev> or &unredactrow=<n>.");
+    const r = await stub.unredact(slug, target);
+    if (!r) return fail(404, `no restorable revision or row on ${ns}/${slug}.`);
+    if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "unredact", reason: `rev ${r.rev}` });
+    return receipt(ctx, "unredacted", { rev: r.rev, row: r.row }, [`unredacted ${r.row === null ? `rev ${r.rev}` : `row ${r.row}`} ${pageUrl}`]);
+  }
+
   const redactRev = Number(p.get("redact"));
   const redactRow = Number(p.get("redactrow"));
   if (p.has("redact") || p.has("redactrow")) {
@@ -412,7 +540,7 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
     if (!Number.isInteger("rev" in target ? target.rev : target.row)) return fail(400, "redact needs &redact=<rev> or &redactrow=<n>.");
     const r = await stub.redact(slug, target);
     if (!("rev" in r)) return fail(404, `no such revision or row on ${ns}/${slug}.`);
-    await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "redact", reason: `${"rev" in target ? `rev ${target.rev}` : `row ${target.row}`}${reason ? ` ${reason}` : ""}` });
+    if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "redact", reason: `${"rev" in target ? `rev ${target.rev}` : `row ${target.row}`}${reason ? ` ${reason}` : ""}` });
     return redactReceipt(ctx, ns, slug, r, pageUrl, isPrivate);
   }
 
@@ -420,9 +548,9 @@ async function moderate(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string
     p.get("freeze") === "1" ? "freeze" : p.get("unfreeze") === "1" ? "unfreeze" :
     p.get("hide") === "1" ? "hide" : p.get("restore") === "1" ? "restore" :
     p.get("append_only") === "1" ? "append_only" : p.get("append_only") === "0" ? "writable" : null;
-  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n>");
+  if (!action) return fail(400, "moderation needs one of &freeze=1 &unfreeze=1 &hide=1 &restore=1 &append_only=1|0 &redact=<rev> &redactrow=<n> &unredact=<rev> &unredactrow=<n> &resolve=<case>");
   if (!(await stub.mod(slug, action, reason))) return fail(404, `no page ${ns}/${slug}.`);
-  await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
+  if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action, reason });
   return receipt(ctx, action, { reason }, [`${action} ${pageUrl}${reason ? ` (${reason})` : ""}`]);
 }
 
@@ -496,7 +624,7 @@ function asIf(ctx: Ctx, path: string, query: URLSearchParams, opts: { html?: boo
   const headers = new Headers({ "cf-connecting-ip": ctx.ip, ...(opts.html ? { accept: "text/html" } : {}) });
   const qs = query.toString();
   const url = `${ctx.url.origin}${path}${qs ? `?${qs}` : ""}`;
-  return route(new Request(url, opts.form ? { method: "POST", headers, body: opts.form } : { headers }), ctx.env);
+  return route(new Request(url, opts.form ? { method: "POST", headers, body: opts.form } : { headers }), ctx.env, ctx.execution);
 }
 
 function pageJson(ctx: Ctx, ns: string, page: Page) {
@@ -559,6 +687,7 @@ async function log(ctx: Ctx): Promise<Response> {
   if (ctx.fmt === "html") return html(views.logView(ctx.base, entries, next));
   const lines = entries.map((e) => `${iso(e.at)} ${e.ns}/${e.slug} ${e.action}${e.reason ? ` ${e.reason}` : ""}`);
   if (next !== null) lines.push(`more: ${ctx.base}/log?before=${next}`);
+  lines.push(`notice: ${ctx.base}/notice`);
   return text(lines.join("\n") + "\n");
 }
 
@@ -579,8 +708,8 @@ async function writeGate(ctx: Ctx, ns: string, keyHash: string | null): Promise<
   return i < 0 ? null : tooMany(results[i]!, checks[i]![2]);
 }
 
-async function limit(env: Env, bucket: string, max: number): Promise<number> {
-  const r = await env.LIMITER.get(env.LIMITER.idFromName(bucket)).take(max, MINUTE);
+async function limit(env: Env, bucket: string, max: number, window = MINUTE): Promise<number> {
+  const r = await env.LIMITER.get(env.LIMITER.idFromName(bucket)).take(max, window);
   return r.ok ? 0 : r.retryAfter;
 }
 
@@ -602,7 +731,10 @@ async function params(ctx: Ctx): Promise<Map<string, string>> {
     const type = ctx.req.headers.get("content-type") ?? "";
     if (type.includes("json")) {
       const body = (await ctx.req.json().catch(() => ({}))) as Record<string, unknown>;
-      for (const [k, v] of Object.entries(body)) if (typeof v === "string") p.set(k, v);
+      for (const [k, v] of Object.entries(body)) {
+        if (typeof v === "string") p.set(k, v);
+        else if ((k === "rev" || k === "row") && typeof v === "number") p.set(k, String(v));
+      }
     } else if (type.includes("form")) {
       for (const [k, v] of await ctx.req.formData()) if (typeof v === "string") p.set(k, v);
     } else {
@@ -620,7 +752,7 @@ function firehose(env: Env): DurableObjectStub<Firehose> {
   return env.FIREHOSE.get(env.FIREHOSE.idFromName("firehose"));
 }
 
-const SLUG_RULE = "[A-Za-z0-9._~/-], 1 to 200 characters, no empty or .. segments, and cannot end in /history, /diff or /edit.";
+const SLUG_RULE = "[A-Za-z0-9._~/-], 1 to 200 characters, no empty or .. segments, and cannot end in /history, /diff, /edit or /report.";
 
 function badSlug(slug: string): boolean {
   return !SLUG_RE.test(slug) || slug.split("/").some((s) => s === "" || s === "..");
@@ -690,7 +822,8 @@ function tooMany(retryAfter: number, rule: string): Response {
 /** Text receipts are one line per fact; the first line always carries the page URL. JSON carries the same facts as fields. */
 function receipt(ctx: Ctx, action: string, fields: Record<string, unknown>, lines: string[]): Response {
   const first = lines[0]!;
-  if (ctx.fmt === "json") return json({ ok: true, action, ...fields, url: first.slice(first.lastIndexOf(" ") + 1) }, 200, WRITE);
-  if (ctx.fmt === "html") return html(views.receiptView(ctx.base, action, lines), 200, WRITE);
+  const url = typeof fields.url === "string" ? fields.url : first.slice(first.lastIndexOf(" ") + 1);
+  if (ctx.fmt === "json") return json({ ok: true, action, ...fields, url }, 200, WRITE);
+  if (ctx.fmt === "html") return html(views.receiptView(ctx.base, action, lines, url), 200, WRITE);
   return text(lines.join("\n") + "\n", 200, WRITE);
 }

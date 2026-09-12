@@ -1,9 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Change, Env, LogEntry } from "./types";
+import type { Change, Env, LogEntry, CaseEntry, CaseInput } from "./types";
+
+import { buildCaseMail, sendInboxMail } from "./mail";
 
 // A single Durable Object that orders every public save across all namespaces. Its sequence
-// number is the /changes cursor. Private namespaces never reach it. It also keeps the public
-// moderation log.
+// number is the /changes cursor. Private namespaces only reach the keyed cases queue.
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS changes (
@@ -14,9 +15,16 @@ CREATE INDEX IF NOT EXISTS changes_author ON changes(author, seq);
 CREATE TABLE IF NOT EXISTS log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, ns TEXT NOT NULL, slug TEXT NOT NULL,
   action TEXT NOT NULL, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cases (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, ns TEXT NOT NULL, slug TEXT NOT NULL,
+  rev INTEGER NOT NULL, row INTEGER, source TEXT NOT NULL, reason TEXT NOT NULL, note TEXT NOT NULL,
+  "by" TEXT NOT NULL, cat INTEGER, quote TEXT, action TEXT NOT NULL, status TEXT NOT NULL,
+  resolved_at INTEGER, resolved_by TEXT);
+CREATE INDEX IF NOT EXISTS cases_status ON cases(status, seq);
 `;
 
 const MAX_WAITERS = 500;
+const MAIL_BATCH = 10 * 60_000;
 
 type ChangeRec = {
   seq: number;
@@ -31,11 +39,15 @@ type ChangeRec = {
 };
 
 export class Firehose extends DurableObject<Env> {
+  private warnedNoMail = false;
   private waiters = new Set<() => void>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => void this.sql.exec(SCHEMA));
+    ctx.blockConcurrencyWhile(async () => {
+      this.sql.exec(SCHEMA);
+      await this.queueCaseMail();
+    });
   }
 
   private get sql(): SqlStorage {
@@ -99,5 +111,68 @@ export class Firehose extends DurableObject<Env> {
       .toArray();
     const page = rows.slice(0, q.n);
     return { entries: page, before: rows.length > q.n ? page[page.length - 1]!.seq : null };
+  }
+
+  async openCase(c: CaseInput): Promise<number> {
+    const status = c.status ?? "open";
+    this.sql.exec(`INSERT INTO cases (at, ns, slug, rev, row, source, reason, note, "by", cat, quote, action, status, resolved_at, resolved_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      c.at, c.ns, c.slug, c.rev, c.row, c.source, c.reason, c.note, c.by, c.cat, c.quote?.slice(0, 300) ?? null,
+      c.action ?? "none", status, status === "resolved" ? Date.now() : null, status === "resolved" ? "policy" : null);
+    const seq = this.sql.exec<{ seq: number }>("SELECT last_insert_rowid() AS seq").one().seq;
+    if (status === "open") await this.queueCaseMail();
+    return seq;
+  }
+
+  flagCase(seq: number, cat: number | null, quote: string | null): void {
+    this.sql.exec("UPDATE cases SET cat = ?, quote = ? WHERE seq = ?", cat, quote?.slice(0, 300) ?? null, seq);
+  }
+
+  resolveCase(seq: number, ns: string, slug: string, who = "moderator", action = "resolve"): boolean {
+    const found = this.sql.exec<{ seq: number }>("SELECT seq FROM cases WHERE seq = ? AND ns = ? AND slug = ?", seq, ns, slug).toArray()[0];
+    if (!found) return false;
+    this.sql.exec("UPDATE cases SET status = 'resolved', resolved_at = ?, resolved_by = ?, action = ? WHERE seq = ? AND status = 'open'", Date.now(), who, action, seq);
+    return true;
+  }
+
+  listCases(q: { all?: boolean; before?: number; n: number }): { cases: CaseEntry[]; before: number | null } {
+    const rows = this.sql.exec<CaseEntry>(
+      "SELECT * FROM cases WHERE (? = 1 OR status = 'open') AND seq < ? ORDER BY seq DESC LIMIT ?",
+      q.all ? 1 : 0, q.before ?? Number.MAX_SAFE_INTEGER, Math.min(200, Math.max(1, q.n)) + 1).toArray();
+    const cases = rows.slice(0, q.n);
+    return { cases, before: rows.length > q.n ? cases[cases.length - 1]!.seq : null };
+  }
+
+  private async queueCaseMail(): Promise<void> {
+    const mailed = (await this.ctx.storage.get<number>("caseMailedSeq")) ?? 0;
+    const pending = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM cases WHERE seq > ? AND status = 'open'", mailed).one().n;
+    if (!pending) return;
+    if (!this.env.INBOX_TO || !this.env.INBOX_MAIL) {
+      if (!this.warnedNoMail) console.log("case mail off: INBOX_MAIL binding or INBOX_TO secret missing");
+      this.warnedNoMail = true;
+      return;
+    }
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + MAIL_BATCH);
+  }
+
+  async flushCaseMail(): Promise<number> {
+    if (!this.env.INBOX_TO || !this.env.INBOX_MAIL) return 0;
+    const mailed = (await this.ctx.storage.get<number>("caseMailedSeq")) ?? 0;
+    const newest = this.sql.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) AS seq FROM cases").one().seq;
+    const cases = this.sql.exec<CaseEntry>("SELECT * FROM cases WHERE seq > ? AND seq <= ? AND status = 'open' ORDER BY seq DESC", mailed, newest).toArray();
+    if (cases.length) await sendInboxMail(this.env.INBOX_MAIL, buildCaseMail(cases, { to: this.env.INBOX_TO, publicUrl: this.env.PUBLIC_URL, now: Date.now() }));
+    await this.ctx.storage.put("caseMailedSeq", newest);
+    return cases.length;
+  }
+
+  async alarm(): Promise<void> {
+    try { await this.flushCaseMail(); }
+    catch {
+      // Keep the cursor unchanged so a failed send cannot lose a batch.
+      console.error("case mail failed, retrying in 10 min");
+      await this.ctx.storage.setAlarm(Date.now() + MAIL_BATCH);
+      return;
+    }
+    await this.queueCaseMail();
   }
 }

@@ -6,6 +6,10 @@ export interface Env {
   NAMESPACE: DurableObjectNamespace<Namespace>;
   FIREHOSE: DurableObjectNamespace<Firehose>;
   LIMITER: DurableObjectNamespace<Limiter>;
+  OPENROUTER_KEY?: string;
+  POLICY_MODEL?: string;
+  POLICY_URL?: string;
+  LINK_SCREEN?: string;
   PUBLIC_URL: string;
   SOURCE_URL: string;
   CONTACT_EMAIL: string;
@@ -116,3 +120,14 @@ export type ExportLine =
   | { kind: "row"; slug: string; n: number; id: string | null; rev: number; by: string; at: number; redacted: boolean; body: string };
 
 export const iso = (ms: number) => new Date(ms).toISOString();
+
+export type PolicyTarget = { rev: number } | { row: number };
+export type PolicyPost = { rev: number; row: number | null; by: string; note: string; body: string; redacted: boolean };
+export type PolicyFlag = { cat: number; quote: string | null; model: string; at: number };
+export type CaseEntry = {
+  seq: number; at: number; ns: string; slug: string; rev: number; row: number | null;
+  source: "auto" | "report"; reason: string; note: string; by: string;
+  cat: number | null; quote: string | null; action: string; status: "open" | "resolved";
+  resolved_at: number | null; resolved_by: string | null;
+};
+export type CaseInput = Omit<CaseEntry, "seq" | "resolved_at" | "resolved_by" | "status" | "action"> & { status?: "open" | "resolved"; action?: string };
