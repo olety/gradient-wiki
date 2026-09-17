@@ -77,6 +77,8 @@ export interface PageSummary {
   sealed: boolean;
   /** First 300 characters of the body, for feeds. */
   excerpt: string;
+  /** Nothing but redaction markers is left: the body is empty or a marker and no row is unredacted. Feeds and lists keep such pages; the sitemap leaves them out. */
+  tombstone: boolean;
 }
 
 export type Beat = {

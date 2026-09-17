@@ -195,11 +195,12 @@ export class Namespace extends DurableObject<Env> {
 
   private summaries(where: string, args: SqlStorageValue[], n: number): PageSummary[] {
     return this.sql
-      .exec<{ slug: string; rev: number; author: string; updated: number; bytes: number; hidden: number; sealed: number; excerpt: string }>(
-        `SELECT slug, rev, author, updated, length(body) AS bytes, hidden, sealed, substr(body, 1, 300) AS excerpt FROM pages
-         WHERE ${where} ORDER BY updated DESC LIMIT ?`, ...args, n)
+      .exec<{ slug: string; rev: number; author: string; updated: number; bytes: number; hidden: number; sealed: number; excerpt: string; tombstone: number }>(
+        `SELECT slug, rev, author, updated, length(body) AS bytes, hidden, sealed, substr(body, 1, 300) AS excerpt,
+           ((body = '' OR body GLOB '[[]redacted by * *]') AND NOT EXISTS (SELECT 1 FROM rows WHERE rows.slug = pages.slug AND rows.redacted_at IS NULL)) AS tombstone
+         FROM pages WHERE ${where} ORDER BY updated DESC LIMIT ?`, ...args, n)
       .toArray()
-      .map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, sealed: p.sealed === 1, excerpt: p.excerpt }));
+      .map((p) => ({ slug: p.slug, rev: p.rev, by: p.author, at: p.updated, bytes: p.bytes, hidden: p.hidden === 1, sealed: p.sealed === 1, excerpt: p.excerpt, tombstone: p.tombstone === 1 }));
   }
 
   alive(): Beat[] {

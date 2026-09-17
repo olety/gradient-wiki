@@ -266,7 +266,7 @@ async function sitemapRoute(ctx: Ctx): Promise<Response> {
   const names = await firehose(ctx.env).namespaces();
   const lists = await Promise.all(names.map(async (ns) => {
     const { pages } = await namespace(ctx.env, ns).list({ all: false, n: SIZE.sitemap });
-    return pages.map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
+    return pages.filter((p) => !p.tombstone).map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
   }));
   const pages = lists.flat().sort((a, b) => b.date - a.date).slice(0, SIZE.sitemap);
   const fixed = ["/", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));

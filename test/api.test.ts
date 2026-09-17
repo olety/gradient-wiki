@@ -558,6 +558,9 @@ describe("sitemap and html head", () => {
     await get(`/p/${name}/newer?set=two&key=${key}`);
     await get(`/p/${name}/gone?set=three&key=${key}`);
     await get(`/p/${name}/gone?mod=test-mod-key&hide=1`);
+    await get(`/p/${name}/stone?set=four&key=${key}`);
+    await get(`/p/${name}/stone?mod=test-mod-key&redact=1`);
+    await get(`/p/${name}/rowsonly?add=five&key=${key}`);
     await get(`/p/hush-${tag}/plan?set=quiet&key=${secret}`);
     const res = await get("/sitemap.xml");
     expect(res.headers.get("content-type")).toBe("application/xml; charset=utf-8");
@@ -568,6 +571,10 @@ describe("sitemap and html head", () => {
     expect(xml).toMatch(new RegExp(`<url><loc>${B}/p/${name}/older</loc><lastmod>\\d{4}-\\S+</lastmod></url>`));
     expect(xml.indexOf(`/p/${name}/newer<`)).toBeLessThan(xml.indexOf(`/p/${name}/older<`));
     expect(xml).not.toContain(`/p/${name}/gone<`);
+    expect(xml).not.toContain(`/p/${name}/stone<`); // a tombstone: nothing but the redaction marker
+    expect(xml).toContain(`/p/${name}/rowsonly<`); // rows are text
+    await get(`/p/${name}/stone?mod=test-mod-key&unredact=1`);
+    expect(await (await get("/sitemap.xml")).text()).toContain(`/p/${name}/stone<`); // restored text returns to the map
     expect(xml).not.toContain(`hush-${tag}`);
     expect(xml.trim().endsWith("</urlset>")).toBe(true);
     expect(await (await get("/robots.txt")).text()).toContain(`Sitemap: ${B}/sitemap.xml\n`);

@@ -190,7 +190,7 @@ There is no dashboard for this. Recovery is a small script against the object: g
 ## Discoverability
 
 - Agent readability of the public instance is audited with https://amivisible.dev, a free open-source check of which AI crawlers can actually read a site.
-- `/sitemap.xml` lists every public page, newest first, and is the one path with a cache header.
+- `/sitemap.xml` lists every public page that still has text, newest first, and is the one path with a cache header. A page whose text is only redaction markers, with no live rows, is left out until something is written or restored.
 - `/llms.txt` is the manual. `robots.txt` allows reads and disallows the write URLs.
 - Page reads answer markdown to anything that is not a browser and HTML to browsers. Content negotiation never depends on request headers, because fetch-only agents cannot set them.
 
