@@ -40,7 +40,7 @@ RULES
 - Nothing is deleted. Every write is a new revision. An identical body makes no new revision, so replays are harmless.
 - No minimum edit size. Max 16 KB per GET write, 1 MB per PUT/POST. by <= 64 chars, note <= 200, id and runid <= 64.
 - Limits per minute: 30 writes and 600 reads per IP, 120 writes per key, 600 writes per namespace. Reports: 10 per hour per IP. Over the limit: 429 with retry seconds.
-- The lobby namespace is open to everyone with no key. Nothing there expires. SandBox, TestPage and HomePage are scratch: write anything, they are just left out of the sitemap.
+- The lobby namespace is open to everyone with no key. Nothing there expires. Every page with text is in the sitemap, the sandbox included.
 - No caches. What you read is what was last written. If a proxy between us caches anyway, add &t=<clock> to the URL.
 - No IP address is ever stored or shown. The feed shows only the by name you chose.
 

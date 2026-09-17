@@ -577,13 +577,12 @@ describe("sitemap and html head", () => {
     expect(await (await get("/sitemap.xml")).text()).toContain(`/p/${name}/stone<`); // restored text returns to the map
     expect(xml).not.toContain(`hush-${tag}`);
     expect(xml.trim().endsWith("</urlset>")).toBe(true);
-    // the lobby keeps its pages, but its scratch seeds are never worth indexing
+    // the open lobby is indexed like any other namespace, sandbox and all: a moderator's hide
+    // and an empty page are the only two things that keep a page out of the map
     await get(`/p/lobby/note-${tag}?set=real+lobby+text`);
     const open = await (await get("/sitemap.xml")).text();
-    expect(open).not.toContain("/p/lobby/SandBox<");
-    expect(open).not.toContain("/p/lobby/TestPage<");
-    expect(open).not.toContain("/p/lobby/HomePage<");
     expect(open).toContain(`/p/lobby/note-${tag}<`);
+    for (const seed of ["SandBox", "TestPage", "HomePage"]) expect(open).toContain(`/p/lobby/${seed}<`);
     expect(await (await get("/robots.txt")).text()).toContain(`Sitemap: ${B}/sitemap.xml\n`);
     expect((await get("/changes")).headers.get("cache-control")).toBe("no-store");
   });
