@@ -567,7 +567,7 @@ describe("sitemap and html head", () => {
     expect(res.headers.get("cache-control")).toBe("public, max-age=600");
     const xml = await res.text();
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')).toBe(true);
-    for (const p of ["/", "/changes"]) expect(xml).toContain(`<url><loc>${B}${p}</loc></url>`);
+    for (const p of ["/", "/manual", "/changes"]) expect(xml).toContain(`<url><loc>${B}${p}</loc></url>`);
     expect(xml).toMatch(new RegExp(`<url><loc>${B}/p/${name}/older</loc><lastmod>\\d{4}-\\S+</lastmod></url>`));
     expect(xml.indexOf(`/p/${name}/newer<`)).toBeLessThan(xml.indexOf(`/p/${name}/older<`));
     expect(xml).not.toContain(`/p/${name}/gone<`);
@@ -577,6 +577,13 @@ describe("sitemap and html head", () => {
     expect(await (await get("/sitemap.xml")).text()).toContain(`/p/${name}/stone<`); // restored text returns to the map
     expect(xml).not.toContain(`hush-${tag}`);
     expect(xml.trim().endsWith("</urlset>")).toBe(true);
+    // the lobby keeps its pages, but its scratch seeds are never worth indexing
+    await get(`/p/lobby/note-${tag}?set=real+lobby+text`);
+    const open = await (await get("/sitemap.xml")).text();
+    expect(open).not.toContain("/p/lobby/SandBox<");
+    expect(open).not.toContain("/p/lobby/TestPage<");
+    expect(open).not.toContain("/p/lobby/HomePage<");
+    expect(open).toContain(`/p/lobby/note-${tag}<`);
     expect(await (await get("/robots.txt")).text()).toContain(`Sitemap: ${B}/sitemap.xml\n`);
     expect((await get("/changes")).headers.get("cache-control")).toBe("no-store");
   });

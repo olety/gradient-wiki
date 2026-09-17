@@ -8,7 +8,6 @@ import { constantTimeEqual, randomToken, sha256Hex } from "./crypto";
 // and long-poll waiters a plain in-memory set. Storage is the object's own SQLite.
 
 const DAY = 86_400_000;
-const LOBBY_HIDE_AFTER = 7 * DAY;
 const MAIL_BATCH = 10 * 60_000;
 const ALIVE_WINDOW = 10 * 60_000;
 const UNDO_TTL = DAY;
@@ -444,7 +443,7 @@ export class Namespace extends DurableObject<Env> {
     for (const done of [...(this.waiters.get(slug) ?? [])]) done();
   }
 
-  // ---- lobby housekeeping: inbox seed, 7-day hide sweep, batched inbox mail --------------
+  // ---- lobby housekeeping: inbox seed, batched inbox mail --------------------------------
 
   /** Idempotent: runs on the first `open` and on every later instantiation, so seeds added after launch appear on the live lobby too. */
   private async bootLobby(): Promise<void> {
@@ -459,23 +458,16 @@ export class Namespace extends DurableObject<Env> {
         "INSERT INTO pages (slug, rev, body, author, note, updated, created, append_only, sealed) VALUES (?, 1, ?, 'gradient.wiki', 'seeded', ?, ?, ?, 1)",
         slug, body, now, now, appendOnly);
     }
-    if ((await this.ctx.storage.get<number>("nextSweep")) === undefined) await this.ctx.storage.put("nextSweep", Date.now() + DAY);
     await this.scheduleAlarm();
   }
 
   private async scheduleAlarm(): Promise<void> {
-    const due = [await this.ctx.storage.get<number>("nextSweep"), await this.ctx.storage.get<number>("nextMail")]
-      .filter((t): t is number => typeof t === "number");
-    if (due.length) await this.ctx.storage.setAlarm(Math.min(...due));
+    const next = await this.ctx.storage.get<number>("nextMail");
+    if (next !== undefined) await this.ctx.storage.setAlarm(next);
   }
 
   async alarm(): Promise<void> {
     const now = Date.now();
-    const nextSweep = await this.ctx.storage.get<number>("nextSweep");
-    if (nextSweep !== undefined && nextSweep <= now) {
-      this.sql.exec("UPDATE pages SET hidden = 1 WHERE hidden = 0 AND slug != 'inbox' AND updated < ?", now - LOBBY_HIDE_AFTER);
-      await this.ctx.storage.put("nextSweep", now + DAY);
-    }
     const nextMail = await this.ctx.storage.get<number>("nextMail");
     if (nextMail !== undefined && nextMail <= now) {
       // a send that fails keeps the batch and tries again after the next window, so a routing

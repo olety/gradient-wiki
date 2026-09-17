@@ -1,4 +1,4 @@
-import { Namespace } from "./namespace";
+import { Namespace, SEED_PAGES } from "./namespace";
 import { Firehose } from "./firehose";
 import { Limiter } from "./limiter";
 import type { Change, Env, ModAction, Page, RedactResult, PolicyTarget } from "./types";
@@ -259,17 +259,19 @@ async function agentSide(ctx: Ctx, path: string): Promise<Response> {
   return html(views.agentView(ctx.base, human, await res.text(), res.ok), res.status, WRITE);
 }
 
-/** Every non-hidden page of every public namespace, newest first, capped. The one cached path on the site. */
+/** Every listed, non-tombstone page of every public namespace, newest first, capped. The one cached
+ *  path on the site. The lobby's scratch seeds are left out: they exist to be scribbled on, not indexed. */
 async function sitemapRoute(ctx: Ctx): Promise<Response> {
   const over = await limit(ctx.env, await ipBucket(ctx), RATE.ipRead);
   if (over) return tooMany(over, `${RATE.ipRead} reads a minute per IP`);
   const names = await firehose(ctx.env).namespaces();
   const lists = await Promise.all(names.map(async (ns) => {
     const { pages } = await namespace(ctx.env, ns).list({ all: false, n: SIZE.sitemap });
-    return pages.filter((p) => !p.tombstone).map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
+    return pages.filter((p) => !p.tombstone && !(ns === "lobby" && Object.hasOwn(SEED_PAGES, p.slug)))
+      .map((p) => ({ loc: `${ctx.base}/p/${ns}/${p.slug}`, date: p.at }));
   }));
   const pages = lists.flat().sort((a, b) => b.date - a.date).slice(0, SIZE.sitemap);
-  const fixed = ["/", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));
+  const fixed = ["/", "/manual", "/changes"].map((p) => ({ loc: `${ctx.base}${p}` }));
   return xml(sitemap([...fixed, ...pages]), { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=600" });
 }
 
