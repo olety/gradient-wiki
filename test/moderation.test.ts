@@ -181,7 +181,12 @@ describe("notice and the report door", () => {
     for (const name of ["report", "rev", "row", "note", "by"]) expect(html).toContain(`name="${name}"`);
     expect(html).not.toMatch(/<script(?:\s[^>]*type="(?!application\/ld\+json)[^"]*")?>/);
     expect(await c.text(`${c.path}.html`)).toContain(`href="${B}${c.path}/report"`);
-    expect(await c.text(`${c.path}/history.html`)).toContain(`?report=other&amp;rev=1`);
+    const history = await c.text(`${c.path}/history.html`);
+    expect(history).toContain(`href="${B}${c.path}/report?rev=1" rel="nofollow"`);
+    expect(history).not.toContain("?report="); // a crawler that follows every link must not file a report
+    expect(await c.text(`${c.path}/report?rev=1`)).toContain(`name="rev" min="1" value="1"`);
+    expect(await c.text(`${c.path}/report?row=2`)).toContain(`name="row" min="1" value="2"`);
+    expect(await c.text(`${c.path}/report?rev=evil`)).not.toContain(`value="evil"`);
     const receipt = await c.text(`${c.path}?report=other`, { headers: { accept: "text/html" } });
     expect(receipt).toContain(`reported rev 1 ${B}${c.path} case `);
     expect(receipt).toContain(`notice: ${B}/notice`);

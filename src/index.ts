@@ -408,7 +408,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
   if (action === "report") {
     if (ctx.req.method !== "GET" && ctx.req.method !== "HEAD") return fail(400, `submit reports to ${pageUrl}.`);
     if (!(await stub.get(slug))) return fail(404, `no page ${ns}/${slug}.`);
-    return html(views.reportFormView(ctx.base, ns, slug, keyHash ? p.get("key") : undefined), 200, WRITE);
+    return html(views.reportFormView(ctx.base, ns, slug, keyHash ? p.get("key") : undefined, { rev: p.get("rev"), row: p.get("row") }), 200, WRITE);
   }
   if (action === "edit") return html(views.editView(ctx.base, ns, slug, await stub.get(slug), !open), 200, WRITE);
   if (action === "history") {

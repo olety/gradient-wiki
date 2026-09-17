@@ -404,7 +404,7 @@ export function historyView(base: string, ns: string, slug: string, revs: Revisi
   const items = byDay(revs, (r, dated) => {
     const prev = revs[revs.indexOf(r) + 1];
     const diff = prev ? ` · <a href="${esc(u)}/diff?a=${prev.rev}&amp;b=${r.rev}">diff</a>` : "";
-    return stop({ at: r.at, dated, cls: r.redacted ? "redacted" : undefined, where: `<a class="where" href="${esc(u)}?rev=${r.rev}">rev ${r.rev}</a>`, note: r.redacted ? "<em>redacted</em>" : r.note ? esc(r.note) : undefined, facts: `${who(r.by, r.sealed)} · ${KIND[r.kind] ?? esc(r.kind)} +${r.bytes}${diff} · <a href="${esc(u)}?report=other&amp;rev=${r.rev}">report</a>` });
+    return stop({ at: r.at, dated, cls: r.redacted ? "redacted" : undefined, where: `<a class="where" href="${esc(u)}?rev=${r.rev}">rev ${r.rev}</a>`, note: r.redacted ? "<em>redacted</em>" : r.note ? esc(r.note) : undefined, facts: `${who(r.by, r.sealed)} · ${KIND[r.kind] ?? esc(r.kind)} +${r.bytes}${diff} · <a href="${esc(u)}/report?rev=${r.rev}" rel="nofollow">report</a>` });
   });
   const h = { title: `history · ${ns}/${slug} · ${SITE}`, description: `Every revision of ${ns}/${slug}, newest first.`, url: `${u}/history` };
   return layout(base, h, `${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "history", facts: `${revs.length} revisions, newest first`, acts: [["page", u], ["edit", `${u}/edit`]] })}${path(items)}`);
@@ -500,14 +500,15 @@ export function noticeView(base: string, text: string): string {
   return layout(base, { title: `notice · ${SITE}`, description: "What Japanese law makes this site remove, how to report, and what a removal looks like.", url: `${base}/notice`, static: true }, `<article>${renderMarkdown(text)}</article>`);
 }
 
-export function reportFormView(base: string, ns: string, slug: string, key?: string): string {
+export function reportFormView(base: string, ns: string, slug: string, key?: string, pre: { rev?: string; row?: string } = {}): string {
   const u = `${base}/p/${ns}/${slug}`;
+  const val = (x?: string) => (x && /^[1-9]\d{0,15}$/.test(x) ? ` value="${x}"` : "");
   return layout(base, { title: `report · ${ns}/${slug} · ${SITE}`, description: "Report a revision or row with a plain form.", url: `${u}/report`, toggle: u, static: true }, `
 ${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "report", acts: [["page", u], ["notice", `${base}/notice`]] })}
 <form method="post" action="${esc(u)}">
 <fieldset><legend>reason</legend>${NOTICE_CATEGORIES.map((r) => `<label><input type="radio" name="report" value="${r}" required>${r}</label>`).join("")}</fieldset>
-<label>revision (leave both blank for current)<input type="number" name="rev" min="1"></label>
-<label>or row<input type="number" name="row" min="1"></label>
+<label>revision (leave both blank for current)<input type="number" name="rev" min="1"${val(pre.rev)}></label>
+<label>or row<input type="number" name="row" min="1"${val(pre.row)}></label>
 <label>note<input name="note" maxlength="200" autocomplete="off"></label>
 <label>by<input name="by" maxlength="64" autocomplete="off"></label>
 ${key ? `<input type="hidden" name="key" value="${esc(key)}">` : ""}
