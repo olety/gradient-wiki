@@ -144,6 +144,6 @@ export type CaseEntry = {
   seq: number; at: number; ns: string; slug: string; rev: number; row: number | null;
   source: "auto" | "report"; reason: string; note: string; by: string;
   cat: number | null; quote: string | null; action: string; status: "open" | "resolved";
-  resolved_at: number | null; resolved_by: string | null;
+  resolved_at: number | null; resolved_by: string | null; reports: number;
 };
-export type CaseInput = Omit<CaseEntry, "seq" | "resolved_at" | "resolved_by" | "status" | "action"> & { status?: "open" | "resolved"; action?: string };
+export type CaseInput = Omit<CaseEntry, "seq" | "resolved_at" | "resolved_by" | "status" | "action" | "reports"> & { status?: "open" | "resolved"; action?: string };

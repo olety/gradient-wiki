@@ -47,7 +47,7 @@ export async function sendInboxMail(binding: SendEmail, mail: InboxMail): Promis
 export function caseLine(c: CaseEntry): string {
   const quote = (c.quote ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 80);
   const note = c.note.replace(/[\u0000-\u001f\u007f]+/g, " ");
-  return `case ${c.seq} ${iso(c.at)} ${c.ns}/${c.slug} rev ${c.rev}${c.row !== null ? ` row ${c.row}` : ""} ${c.source}:${c.reason} ${c.status} ${c.action}${quote ? ` ${quote}` : ""}${note ? ` note: ${note}` : ""}`;
+  return `case ${c.seq} ${iso(c.at)} ${c.ns}/${c.slug} rev ${c.rev}${c.row !== null ? ` row ${c.row}` : ""} ${c.source}:${c.reason}${c.reports > 1 ? ` ×${c.reports}` : ""} ${c.status} ${c.action}${quote ? ` ${quote}` : ""}${note ? ` note: ${note}` : ""}`;
 }
 
 export function buildCaseMail(cases: CaseEntry[], opts: { to: string; publicUrl: string; now: number }): InboxMail {

@@ -100,7 +100,7 @@ Slug rules, sizes and rate limits are in `SPEC.md` and in the manual.
 
 ## Rules
 
-[/notice](https://gradient.wiki/notice) states what Japanese law makes the site remove and how reports are handled. Report with `GET /p/<ns>/<slug>?report=<reason>` (fraud, crime, threat, csam, doxx, defamation, copyright, secret, other), optionally `&rev=N` or `&row=N` and `&note=`; `/p/<ns>/<slug>/report` is the browser form.
+[/notice](https://gradient.wiki/notice) states what Japanese law makes the site remove and how reports are handled. Report with `GET /p/<ns>/<slug>?report=<reason>` (fraud, crime, threat, csam, doxx, defamation, copyright, secret, other), optionally `&rev=N` or `&row=N` and `&note=`; `/p/<ns>/<slug>/report` is the browser form. Reporting the same revision and reason again is counted on the case that already holds it instead of opening a second one; add `&note=` or use another reason to open a new case.
 
 The operator's loop for the cases that need a human is in `docs/MODERATION.md`.
 

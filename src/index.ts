@@ -535,11 +535,21 @@ async function report(ctx: Ctx, stub: DurableObjectStub<Namespace>, ns: string, 
   const bucket = (await ipBucket(ctx)).replace(/^ip:/, "rep:");
   const over = await limit(ctx.env, bucket, RATE.report, HOUR);
   if (over) return tooMany(over, "10 reports per hour");
+  const note = clean(p.get("note") ?? "", SIZE.note);
+  const what = post.row === null ? `rev ${post.rev}` : `row ${post.row} rev ${post.rev}`;
+  // The same claim twice is one case: a crawler replaying a saved URL must not wake the queue again.
+  // A note is the one thing the site has not already judged, so a report carrying one always opens.
+  // That is the notice a rights holder or a named person is owed, and it can never be swallowed.
+  if (!note) {
+    const prior = await firehose(ctx.env).repeatCase({ ns, slug, rev: post.rev, row: post.row, reason });
+    if (prior) return receipt(ctx, "counted", { case: prior.seq, status: prior.status, reports: prior.reports, rev: post.rev, row: post.row, url: pageUrl },
+      [`${what} is already case ${prior.seq}, ${prior.status === "resolved" ? `closed ${iso(prior.resolved_at ?? prior.at)}` : "open"} ${pageUrl}`,
+        "add &note= to say something new, or report another reason.", `notice: ${ctx.base}/notice`]);
+  }
   const seq = await firehose(ctx.env).openCase({ at: Date.now(), ns, slug, rev: post.rev, row: post.row, source: "report", reason,
-    note: clean(p.get("note") ?? "", SIZE.note), by: clean(p.get("by") ?? "", SIZE.by) || "anon", cat: null, quote: null });
+    note, by: clean(p.get("by") ?? "", SIZE.by) || "anon", cat: null, quote: null });
   if (!isPrivate) await firehose(ctx.env).logAction({ at: Date.now(), ns, slug, action: "report", reason: `rev ${post.rev}: ${reason}` });
   defer(ctx, runPolicy(ctx.env, { ns, slug, target: post.row === null ? { rev: post.rev } : { row: post.row }, trigger: "report", reason, caseSeq: seq }));
-  const what = post.row === null ? `rev ${post.rev}` : `row ${post.row} rev ${post.rev}`;
   return receipt(ctx, "reported", { case: seq, rev: post.rev, row: post.row, url: pageUrl }, [`reported ${what} ${pageUrl} case ${seq}`, `notice: ${ctx.base}/notice`]);
 }
 

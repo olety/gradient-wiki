@@ -20,12 +20,16 @@ CREATE TABLE IF NOT EXISTS cases (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, ns TEXT NOT NULL, slug TEXT NOT NULL,
   rev INTEGER NOT NULL, row INTEGER, source TEXT NOT NULL, reason TEXT NOT NULL, note TEXT NOT NULL,
   "by" TEXT NOT NULL, cat INTEGER, quote TEXT, action TEXT NOT NULL, status TEXT NOT NULL,
-  resolved_at INTEGER, resolved_by TEXT);
+  resolved_at INTEGER, resolved_by TEXT, reports INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS cases_status ON cases(status, seq);
+CREATE INDEX IF NOT EXISTS cases_claim ON cases(ns, slug, rev, row, reason);
 `;
 
 // Columns added after the first schema; brings a pre-existing database up to date.
-const LATER_COLUMNS: Record<string, string> = { sealed: "INTEGER NOT NULL DEFAULT 0" };
+const LATER_COLUMNS: Record<string, Record<string, string>> = {
+  changes: { sealed: "INTEGER NOT NULL DEFAULT 0" },
+  cases: { reports: "INTEGER NOT NULL DEFAULT 1" },
+};
 
 const MAX_WAITERS = 500;
 const MAIL_BATCH = 10 * 60_000;
@@ -51,8 +55,10 @@ export class Firehose extends DurableObject<Env> {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(SCHEMA);
-      const have = new Set(this.sql.exec<{ name: string }>("PRAGMA table_info(changes)").toArray().map((r) => r.name));
-      for (const [col, decl] of Object.entries(LATER_COLUMNS)) if (!have.has(col)) this.sql.exec(`ALTER TABLE changes ADD COLUMN ${col} ${decl}`);
+      for (const [table, columns] of Object.entries(LATER_COLUMNS)) {
+        const have = new Set(this.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().map((r) => r.name));
+        for (const [col, decl] of Object.entries(columns)) if (!have.has(col)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+      }
       await this.queueCaseMail();
     });
   }
@@ -129,6 +135,23 @@ export class Firehose extends DurableObject<Env> {
     const seq = this.sql.exec<{ seq: number }>("SELECT last_insert_rowid() AS seq").one().seq;
     if (status === "open") await this.queueCaseMail();
     return seq;
+  }
+
+  /**
+   * A report of a claim an earlier report already made. Counts it on the case that owns it and hands
+   * that case back, so replaying one URL can never open a second case. Null when the claim is new.
+   * A still-open case wins over a closed one: that is where the moderator is still looking.
+   * Only reports match. A case the classifier opened by itself is the site's own reading, so a person
+   * reporting the same text is telling us something new and gets a case of their own.
+   */
+  repeatCase(c: { ns: string; slug: string; rev: number; row: number | null; reason: string }): CaseEntry | null {
+    const found = this.sql.exec<CaseEntry>(
+      `SELECT * FROM cases WHERE ns = ? AND slug = ? AND rev = ? AND row IS ? AND reason = ? AND source = 'report'
+       ORDER BY status = 'open' DESC, seq DESC LIMIT 1`,
+      c.ns, c.slug, c.rev, c.row, c.reason).toArray()[0];
+    if (!found) return null;
+    this.sql.exec("UPDATE cases SET reports = reports + 1 WHERE seq = ?", found.seq);
+    return { ...found, reports: found.reports + 1 };
   }
 
   flagCase(seq: number, cat: number | null, quote: string | null): void {

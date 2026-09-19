@@ -448,7 +448,7 @@ export function receiptView(base: string, action: string, lines: string[], url?:
   const pageUrl = url ?? first.slice(first.lastIndexOf(" ") + 1);
   const undo = lines.find((l) => l.startsWith("undo: "))?.slice(6);
   const links = [pageUrl.startsWith("http") && `<a href="${esc(pageUrl)}">open the page</a>`, undo && `<a href="${esc(undo)}">undo this</a>`].filter(Boolean).join(" · ");
-  const h = { title: `${action} · ${SITE}`, description: first, url: pageUrl.startsWith("http") ? pageUrl : `${base}/`, static: action === "reported" };
+  const h = { title: `${action} · ${SITE}`, description: first, url: pageUrl.startsWith("http") ? pageUrl : `${base}/`, static: action === "reported" || action === "counted" };
   return layout(base, h, `<div class="receipt well">${STAMP}<pre>${esc(lines.join("\n"))}</pre></div>${links ? `<p class="mono">${links}</p>` : ""}`);
 }
 
@@ -542,7 +542,7 @@ export function queueView(base: string, cases: QueueCase[], openCount: number, b
 <dl>
 <dt>text</dt><dd class="mono">${redacted ? `<span>kept privately, never served</span><br>${esc(c.kept ?? "(no kept text)")}` : esc(post?.body ?? "(no text)")}</dd>
 <dt>by</dt><dd>${post ? who(post.by, post.sealed, true) : "(no author)"}</dd>
-${c.source === "report" ? `<dt>reported</dt><dd>by ${esc(c.by)} · ${esc(c.reason)}${c.note ? ` · ${esc(c.note)}` : ""}</dd>` : ""}
+${c.source === "report" ? `<dt>reported</dt><dd>by ${esc(c.by)} · ${esc(c.reason)}${c.reports > 1 ? ` · ${c.reports} times` : ""}${c.note ? ` · ${esc(c.note)}` : ""}</dd>` : ""}
 ${flag ? `<dt>flag</dt><dd>${esc(flag.cat === 0 ? "OK" : CATEGORY_SLUGS[flag.cat - 1] ?? String(flag.cat))}${flag.quote ? ` · ${esc(flag.quote)}` : ""} · ${esc(flag.model)} · ${tm(flag.at, stampDate(flag.at))}</dd>` : ""}
 </dl>
 <form method="post" action="/mod/queue"><input type="hidden" name="case" value="${c.seq}">${all ? '<input type="hidden" name="all" value="1">' : ""}${actions.map((a) => `<button name="action" value="${a}">${a}</button>`).join("")}</form>

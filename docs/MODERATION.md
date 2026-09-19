@@ -10,6 +10,8 @@ Every write is classified in the background right after its receipt. Fraud, crim
 
 A mail arrives at most ten minutes after a case opens, one mail per batch, and only for cases that need a human: defamation the classifier flagged on its own, reports the classifier disagreed with, copyright, "other", and secret reports where no credential matched. The notice promises an answer within seven days; the same day is the habit to keep.
 
+A case is one claim, not one report. The same revision reported again for the same reason is counted on the case that already holds it, so a crawler replaying a saved report URL cannot wake the queue twice. The drawer shows `N times`; a high count on an open case means people landed on the same text independently, which is worth reading. A report carrying a note, or naming a different reason, always opens its own case.
+
 Open the link. The first time, sign in with the moderation key; the browser keeps a thirty-day cookie after that. Open each drawer, read the text and the reason, then one button:
 
 - **Defamation.** Redact when all three hold: a named private person, a concrete factual accusation, no source. Otherwise resolve and leave it up. Companies, officials, public acts, opinions and sourced claims stay.

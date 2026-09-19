@@ -11,7 +11,7 @@ const B = "https://gradient.wiki";
 const MOD = "mod=test-mod-key";
 const REASONS = ["fraud", "crime", "threat", "csam", "doxx", "defamation", "copyright", "secret", "other"];
 type Reply = { verdict: "OK" | "VIOLATION"; category: number | null; quote: string | null };
-type Case = { seq: number; ns: string; slug: string; rev: number; row: number | null; source: string; reason: string; note: string; quote: string | null; status: string; action: string; resolved_by: string | null };
+type Case = { seq: number; ns: string; slug: string; rev: number; row: number | null; source: string; reason: string; note: string; quote: string | null; status: string; action: string; resolved_by: string | null; reports: number };
 const replies = new Map<string, Reply>();
 const calls: Array<{ model: string; temperature: number; max_tokens: number; messages: Array<{ role: string; content: string }>; response_format: Record<string, unknown> }> = [];
 const dnsCalls: string[] = [];
@@ -145,6 +145,44 @@ describe("notice and the report door", () => {
     for (const suffix of [".json", "/history.json"]) expect(await c.text(c.path + suffix)).not.toContain("PRIVATE-NOTE");
   });
 
+  it("counts a repeat of the same claim instead of opening a second case", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=ordinary+text`);
+    await classified("lobby", c.tag);
+    const first = await c.json<{ case: number }>(`${c.path}.json?report=other&rev=1`);
+    const again = await c.json<Record<string, unknown>>(`${c.path}.json?report=other&rev=1`);
+    expect(again).toEqual({ ok: true, action: "counted", case: first.case, status: "open", reports: 2, rev: 1, row: null, url: `${B}${c.path}` });
+    expect(await c.ownCases()).toHaveLength(1);
+    expect(await c.text(`${c.path}?report=other&rev=1`)).toBe(
+      `rev 1 is already case ${first.case}, open ${B}${c.path}\nadd &note= to say something new, or report another reason.\nnotice: ${B}/notice\n`);
+
+    // A different reason is a different claim, and a note is the one thing the site has not judged.
+    await c.get(`${c.path}?report=copyright&rev=1`);
+    await c.get(`${c.path}?report=other&rev=1&note=I+wrote+this`);
+    const cases = await c.ownCases();
+    expect(cases).toHaveLength(3);
+    expect(cases.find((x) => x.seq === first.case)!.reports).toBe(3);
+    // Only the three that opened a case reach /log; the counted repeats leave no trace there.
+    expect((await c.text("/log?n=200")).split("\n").filter((l) => l.includes(`lobby/${c.tag} report`))).toHaveLength(3);
+  });
+
+  it("counts a repeat after the case is closed and never reopens it", async () => {
+    const c = client();
+    await c.get(`${c.path}?set=ordinary+text`);
+    await classified("lobby", c.tag);
+    const first = await c.json<{ case: number }>(`${c.path}.json?report=other&rev=1`);
+    expect((await c.get(`${c.path}?${MOD}&resolve=${first.case}`)).status).toBe(200);
+    expect(await c.json<Record<string, unknown>>(`${c.path}.json?report=other&rev=1`))
+      .toMatchObject({ action: "counted", case: first.case, status: "resolved", reports: 2 });
+    expect(await c.ownCases()).toHaveLength(0);
+    expect(await c.text(`${c.path}?report=other&rev=1`)).toMatch(
+      new RegExp(`^rev 1 is already case ${first.case}, closed \\d{4}-\\d\\d-\\d\\dT\\S+ ${B}${c.path}\n`));
+    const all = await c.ownCases(true);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ seq: first.case, status: "resolved", reports: 3 });
+    expect(await c.text(`/mod/queue?${MOD}&all=1&n=200`)).toContain(`lobby/${c.tag} rev 1 report:other ×3 resolved`);
+  });
+
   it("rejects bad reasons and bad targets without creating cases", async () => {
     const c = client();
     await c.get(`${c.path}?set=ordinary`);
@@ -166,7 +204,9 @@ describe("notice and the report door", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
     expect(await limited.text()).toContain("slow down: 10 reports per hour");
-    expect(await c.ownCases()).toHaveLength(10);
+    const [only, ...rest] = await c.ownCases();
+    expect(rest).toHaveLength(0);
+    expect(only!.reports).toBe(10);
     expect((await c.get(`${c.path}?set=still+can+write`)).status).toBe(200);
   });
 
@@ -762,7 +802,7 @@ describe("moderator sign-in and queue drawers", () => {
     expect(await c.text("/mod/queue.json?before=1", { headers: { cookie } })).toBe(JSON.stringify({ cases: [], before: null }, null, 1) + "\n");
     await c.get(`${c.path}?set=mail+body`);
     const seq = await reportCase(c);
-    const seq2 = await reportCase(c);
+    const seq2 = await reportCase(c, "&note=a+second+claim");
     const fh = env.FIREHOSE.get(env.FIREHOSE.idFromName("firehose"));
     const cases = [(await fh.getCase(seq))!, (await fh.getCase(seq2))!];
     const mail = buildCaseMail(cases, { publicUrl: `${B}/`, to: "owner@example.com", now: Date.now() });

@@ -120,7 +120,7 @@ describe("link extraction and timeout", () => {
 });
 
 it("builds one private queue mail with an unkeyed queue URL", () => {
-  const entry: CaseEntry = { seq: 1, at: 0, ns: "lobby", slug: "case", rev: 1, row: null, source: "report", reason: "copyright", note: "private note", by: "reporter", cat: null, quote: "private quote", action: "none", status: "open", resolved_at: null, resolved_by: null };
+  const entry: CaseEntry = { seq: 1, at: 0, ns: "lobby", slug: "case", rev: 1, row: null, source: "report", reason: "copyright", note: "private note", by: "reporter", cat: null, quote: "private quote", action: "none", status: "open", resolved_at: null, resolved_by: null, reports: 1 };
   const mail = buildCaseMail([entry, { ...entry, seq: 2 }], { to: "owner@example.com", publicUrl: "https://gradient.wiki", now: 0 });
   expect(mail.from).toBe("inbox@gradient.wiki");
   expect(mail.raw).toContain("Subject: gradient.wiki: 2 open cases\r\n");
