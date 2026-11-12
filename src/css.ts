@@ -34,6 +34,7 @@ main{position:relative;margin:.75rem 0;padding:2rem 1.75rem 2.25rem}
 .head h1 .sub{font-weight:400;font-size:1.1rem;color:var(--ink-soft)}
 .under{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.25rem 1.5rem;margin-top:.4rem}
 .facts{font:13px/1.7 var(--mono);color:var(--bark);margin:0;font-variant-numeric:tabular-nums;overflow-wrap:break-word}
+.provenance{font:italic 12px/1.6 var(--mono);color:var(--bark);margin:.2rem 0 0}
 .facts a{color:inherit}
 .guest{color:var(--bark);opacity:.72;letter-spacing:.02em}
 svg.seal-s{width:1.05em;height:1.05em;vertical-align:-.16em;margin-right:.32em}
@@ -136,7 +137,7 @@ button.link{font:14px/1.6 var(--mono);min-height:0;padding:.5rem 0;margin:0;bord
 .empty{text-align:center;max-width:34rem;margin:1rem auto}
 .empty .mono{overflow-wrap:break-word}
 footer{padding:.6rem 0 0;font:14px/1.6 var(--mono);color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
-p.notice,p.provenance{font:14px/1.6 var(--mono);color:var(--ink-soft);margin:0 0 1rem}
+p.notice{font:14px/1.6 var(--mono);color:var(--ink-soft);margin:0 0 1rem}
 .more{font:15px/1.6 var(--mono);margin:1rem 0 0}
 .fnav{display:none}
 @media(max-width:40rem){body{padding:0 .9rem 2rem}main{padding:1.4rem 1rem 1.5rem}header nav{display:none}.fnav{display:block}footer{gap:.35rem .7rem}.head h1{font-size:1.5rem}.wm{order:-2}.seg{order:-1;margin-left:auto}header nav{margin-left:0}ol.path li{grid-template-columns:5.9rem minmax(0,1fr)}.t{font-size:13px}ol.path .facts{grid-column:2;text-align:left;white-space:normal}ol.path.rows li{grid-template-columns:1fr}ol.path.rows .facts{grid-column:1}.man .g{grid-template-columns:minmax(0,1fr)}.man .ex{grid-column:1}}

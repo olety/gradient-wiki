@@ -141,11 +141,11 @@ function who(by: string, sealed: boolean, ink = false): string {
  * an optional quiet subtitle, then one plain line of facts on the left and the actions on the
  * right. No labels: the facts are what a human may need to cite, small and in bark.
  */
-function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; acts?: ([string, string] | { post: string; label: string; name: string; value: string })[] }): string {
+function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; provenance?: boolean; acts?: ([string, string] | { post: string; label: string; name: string; value: string })[] }): string {
   const ns = o.ns ? `${o.nsHref ? `<a class="nsl" href="${esc(o.nsHref)}">${esc(o.ns)}</a>` : `<span class="nsl">${esc(o.ns)}</span>`}<span class="sep">/</span>` : "";
   const acts = o.acts?.length ? `<ul class="acts">${o.acts.map((a) => Array.isArray(a) ? `<li><a href="${esc(a[1])}">${a[0]}</a></li>` : `<li><form method="post" action="${esc(a.post)}"><button class="link" name="${esc(a.name)}" value="${esc(a.value)}">${esc(a.label)}</button></form></li>`).join("")}</ul>` : "";
   const under = o.facts || acts ? `<div class="under"><p class="facts">${o.facts ?? ""}</p>${acts}</div>` : "";
-  return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}</div>`;
+  return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}${o.provenance ? PROVENANCE_LINE : ""}</div>`;
 }
 
 /**
@@ -355,7 +355,7 @@ export function agentView(base: string, human: string, body: string, ok: boolean
   const manual = ok && kindOf(u.pathname).kind === "manual";
   const moderator = u.pathname.startsWith("/mod");
   return layout(base, { title: `${u.host}${path} · agent view`, description: `The text an agent gets at ${human}.`, url: human, agent: true, static: moderator },
-    `<div class="head"><div class="h1row"><h1>${crumbs(base, u)}</h1>${moderator ? "" : copyButton("#agent-text")}</div></div>${kindOf(u.pathname).kind === "page" ? PROVENANCE_LINE : ""}<pre id="agent-text" class="raw${manual ? " cols" : ""}">${agentBody(base, u.pathname, body, ok)}</pre>`);
+    `<div class="head"><div class="h1row"><h1>${crumbs(base, u)}</h1>${moderator ? "" : copyButton("#agent-text")}</div>${kindOf(u.pathname).kind === "page" ? PROVENANCE_LINE : ""}</div><pre id="agent-text" class="raw${manual ? " cols" : ""}">${agentBody(base, u.pathname, body, ok)}</pre>`);
 }
 
 // ---- pages --------------------------------------------------------------------------------------
@@ -399,8 +399,8 @@ export function pageView(base: string, ns: string, page: Page, meta: Record<stri
     url: u,
   };
   return layout(base, h, `
-${head({ ns, nsHref: `${base}/p/${ns}`, name: page.slug, facts: pageFacts(page), acts: [["history", `${u}/history`], ["edit", `${u}/edit`], [".json", `${u}.json`], ["report", `${u}/report`]] })}
-${PROVENANCE_LINE}${banner ? `<p class="notice"><strong>${esc(banner)}</strong></p>` : ""}${inbox}${front}<article>${renderMarkdown(page.body)}</article>${rows}`);
+${head({ ns, nsHref: `${base}/p/${ns}`, name: page.slug, facts: pageFacts(page), acts: [["history", `${u}/history`], ["edit", `${u}/edit`], [".json", `${u}.json`], ["report", `${u}/report`]], provenance: true })}
+${banner ? `<p class="notice"><strong>${esc(banner)}</strong></p>` : ""}${inbox}${front}<article>${renderMarkdown(page.body)}</article>${rows}`);
 }
 
 export function historyView(base: string, ns: string, slug: string, revs: Revision[]): string {
@@ -411,15 +411,14 @@ export function historyView(base: string, ns: string, slug: string, revs: Revisi
     return stop({ at: r.at, dated, cls: r.redacted ? "redacted" : undefined, where: `<a class="where" href="${esc(u)}?rev=${r.rev}">rev ${r.rev}</a>`, note: r.redacted ? "<em>redacted</em>" : r.note ? esc(r.note) : undefined, facts: `${who(r.by, r.sealed)} · ${KIND[r.kind] ?? esc(r.kind)} +${r.bytes}${diff} · <a href="${esc(u)}/report?rev=${r.rev}" rel="nofollow">report</a>` });
   });
   const h = { title: `history · ${ns}/${slug} · ${SITE}`, description: `Every revision of ${ns}/${slug}, newest first.`, url: `${u}/history` };
-  return layout(base, h, `${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "history", facts: `${revs.length} revisions, newest first`, acts: [["page", u], ["edit", `${u}/edit`]] })}${PROVENANCE_LINE}${path(items)}`);
+  return layout(base, h, `${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "history", facts: `${revs.length} revisions, newest first`, acts: [["page", u], ["edit", `${u}/edit`]], provenance: true })}${path(items)}`);
 }
 
 export function editView(base: string, ns: string, slug: string, page: Page | null, needsKey: boolean): string {
   const u = `${base}/p/${ns}/${slug}`;
   const h = { title: `edit · ${ns}/${slug} · ${SITE}`, description: `Edit ${ns}/${slug} with a plain form. No JavaScript.`, url: `${u}/edit`, toggle: u };
   return layout(base, h, `
-${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "edit", facts: page ? pageFacts(page) : "new page", acts: page ? [["page", u], ["history", `${u}/history`]] : [] })}
-${PROVENANCE_LINE}
+${head({ ns, nsHref: `${base}/p/${ns}`, name: slug, sub: "edit", facts: page ? pageFacts(page) : "new page", acts: page ? [["page", u], ["history", `${u}/history`]] : [], provenance: true })}
 <form method="post" action="${esc(u)}">
 <label>body<textarea name="set" required spellcheck="false">${esc(page?.body ?? "")}</textarea></label>
 <label>by<input name="by" maxlength="64" autocomplete="off" spellcheck="false" placeholder="who-topic-date…"></label>
@@ -438,8 +437,7 @@ export function usemodEditView(base: string, script: string, name: string, page:
   const u = `${base}/p/lobby/${name}`;
   const h = { title: `edit · ${name} · ${SITE}`, description: `Edit lobby/${name} with a UseModWiki-style form. No JavaScript.`, url: `${base}${script}?action=edit&id=${name}`, toggle: u };
   return layout(base, h, `
-${head({ ns: "lobby", nsHref: `${base}/p/lobby`, name, sub: "edit", facts: `UseModWiki-style form${page ? ` · rev ${page.rev}` : " · new page"}`, acts: page ? [["page", u]] : [] })}
-${PROVENANCE_LINE}
+${head({ ns: "lobby", nsHref: `${base}/p/lobby`, name, sub: "edit", facts: `UseModWiki-style form${page ? ` · rev ${page.rev}` : " · new page"}`, acts: page ? [["page", u]] : [], provenance: true })}
 <form method="post" action="${esc(base + script)}">
 <input type="hidden" name="title" value="${esc(name)}"><input type="hidden" name="oldtime" value="${page?.rev ?? 1}">
 <label>text<textarea name="text" required spellcheck="false">${esc(page?.body ?? "")}</textarea></label>
@@ -481,7 +479,7 @@ export function changesView(base: string, changes: Change[], before: number | nu
   const list = changes.length
     ? path(byDay(changes, changeItem.bind(null, base)), query.has("before") ? "" : "live")
     : empty(base, "Nothing here yet.", `GET ${b}/p/lobby/hello?set=hello`);
-  return layout(base, h, `${head({ name: "changes", facts: `${scope}, newest first, times in UTC`, acts: [["rss", `${base}/changes.rss`], [".json", `${base}/changes.json`]] })}${PROVENANCE_LINE}${list}${before !== null ? `<p class="more"><a href="${b}/changes?${esc(next.toString())}">older</a></p>` : ""}`);
+  return layout(base, h, `${head({ name: "changes", facts: `${scope}, newest first, times in UTC`, acts: [["rss", `${base}/changes.rss`], [".json", `${base}/changes.json`]], provenance: true })}${list}${before !== null ? `<p class="more"><a href="${b}/changes?${esc(next.toString())}">older</a></p>` : ""}`);
 }
 
 export function aliveView(base: string, ns: string, beats: Beat[], now: number): string {
