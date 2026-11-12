@@ -85,7 +85,8 @@ export async function classify(env: Env, input: PolicyInput): Promise<Verdict> {
       const response = await fetch(env.POLICY_URL || "https://openrouter.ai/api/v1/chat/completions", {
         method: "POST", signal: controller.signal,
         headers: { authorization: `Bearer ${env.OPENROUTER_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: env.POLICY_MODEL || POLICY_MODEL, temperature: 0, max_tokens: 400, response_format: RESPONSE_FORMAT,
+        // provider.zdr: OpenRouter routes only to endpoints with zero data retention, or answers an error.
+        body: JSON.stringify({ model: env.POLICY_MODEL || POLICY_MODEL, temperature: 0, max_tokens: 400, provider: { zdr: true }, response_format: RESPONSE_FORMAT,
           messages: [{ role: "system", content: POLICY }, { role: "user", content }] }),
       });
       if (!response.ok) throw new Error("classifier unavailable");

@@ -111,6 +111,7 @@ The operator's loop for the cases that need a human is in `docs/MODERATION.md`.
 - Every write receipt ends with an undo link. It redacts that revision or row for 24 hours.
 - Nothing is deleted. Moderators can freeze or hide a page, and history stays readable. The one exception is redaction: the author's undo link, or a moderator, replaces the text of one revision or row with a marker. The revision number stays.
 - No IP address is ever stored, logged or shown. Rate limits use a salted hash held only in memory.
+- Two checks send data out. Every write to a public namespace, and every reported text, goes to the classifier `openai/gpt-oss-safeguard-20b` through OpenRouter with `provider.zdr`, so only zero-data-retention endpoints serve it (`src/policy.ts`). Private namespaces are not sent. Link hostnames, never the text, are looked up on Cloudflare's malware and phishing resolver. Nothing else leaves the Worker except mail to the operator.
 
 ## The declared write surface
 
@@ -142,6 +143,7 @@ Local dev: copy `.dev.vars.example` to `.dev.vars`, then `bun run dev`.
 | `PAUSE_MESSAGE` | var | the text after `writes paused:`. Default `back soon` |
 | `POLICY_MODEL` | var | classifier model; default `openai/gpt-oss-safeguard-20b` |
 | `POLICY_URL` | var | classifier endpoint; default `https://openrouter.ai/api/v1/chat/completions` |
+| `OPENROUTER_KEY` | secret | enables the classifier. Unset = classifier off, reports still open cases |
 | `LINK_SCREEN` | var | malware/phishing link screen; `0` disables, enabled by default |
 | `MOD_KEY` | secret | enables `?mod=<key>` actions. Unset = moderation off |
 | `IP_SALT` | secret | salts the per-IP rate-limit bucket hash |

@@ -40,7 +40,7 @@ describe("classifier request and failure bounds", () => {
     expect(url).toBe("https://policy.test/v1");
     expect(new Headers(init!.headers).get("authorization")).toBe("Bearer test-key");
     const request = JSON.parse(String(init!.body));
-    expect(request).toMatchObject({ temperature: 0, max_tokens: 400, model: "chosen-model" });
+    expect(request).toMatchObject({ temperature: 0, max_tokens: 400, model: "chosen-model", provider: { zdr: true } });
     expect(request.messages).toEqual([{ role: "system", content: POLICY }, { role: "user", content: `lobby/unit row 3
 by: author
 note: summary

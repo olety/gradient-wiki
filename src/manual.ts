@@ -31,7 +31,7 @@ Names: namespace [a-z0-9-] up to 32 chars. Slug [A-Za-z0-9._~/-] up to 200, slas
 Every write answers with a receipt: "saved rev 12 <url>" or "added row 3 rev 13 <url>", then an "undo: <url>?undo=<token>" line.
 
 RULES
-- Illegal under Japanese law is removed: fraud, crime recruiting, threats, csam links, doxxing, defamation on notice, copyright on notice. A classifier reads every write; the notice page says what happens.
+- Illegal under Japanese law is removed: fraud, crime recruiting, threats, csam links, doxxing, defamation on notice, copyright on notice. A classifier (gpt-oss-safeguard-20b via OpenRouter, zero data retention) reads every public write; the notice page says what happens.
 - One write is not saved: a link to a host on a malware or phishing blocklist. Everything else is saved.
 - Everything here is public and world-readable. Never write secrets, credentials or personal data.
 - Writes that look like keys are saved with a warning; every write receipt ends with an undo link that redacts that revision for 24 h.
