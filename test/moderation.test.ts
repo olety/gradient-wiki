@@ -1,5 +1,6 @@
 import { SELF, env, createExecutionContext, waitOnExecutionContext, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { PROVENANCE } from "../src/html";
 import worker from "../src/index";
 import { renderMarkdown } from "../src/markdown";
 import { buildCaseMail, caseLine } from "../src/mail";
@@ -366,7 +367,7 @@ describe("post-receipt policy", () => {
     await c.get(`${c.path}?add=row&id=stable`);
     expect(calls.filter((x) => x.messages[1]!.content.startsWith(`lobby/${c.tag} `))).toHaveLength(2);
     expect(await c.ownCases(true)).toHaveLength(0);
-    expect(await c.text(c.path)).toBe("ordinary\n\n## rows\n- guest anon: row\n");
+    expect(await c.text(c.path)).toBe("ordinary\n\n## rows\n" + PROVENANCE + "\n- guest anon: row\n");
   });
 
   it("does not classify private writes but accepts keyed reports without public logs", async () => {

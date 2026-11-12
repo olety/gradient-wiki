@@ -434,7 +434,7 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     const { changed, page } = await stub.wait(slug, since, seconds);
     if (ctx.fmt === "json") return json({ ...(page ? pageJson(ctx, ns, page) : { ns, slug, rev: 0, body: null }), changed });
     const head = changed && page ? `rev ${page.rev} changed ${iso(page.at)} by ${signed(page.by, page.sealed)}` : `rev ${page?.rev ?? 0} unchanged after ${seconds}s`;
-    return text(`${head}\n\n${page?.body ?? ""}`, 200, { "x-rev": String(page?.rev ?? 0), "x-changed": String(changed) });
+    return text(`${head}\n${views.PROVENANCE}\n\n${page?.body ?? ""}`, 200, { "x-rev": String(page?.rev ?? 0), "x-changed": String(changed) });
   }
 
   const rev = p.has("rev") ? Number(p.get("rev")) : undefined;
@@ -448,8 +448,9 @@ async function pageRoute(ctx: Ctx, ns: string, rest: string): Promise<Response> 
     case "html":
       return html(views.pageView(ctx.base, ns, page, parseFrontMatter(page.body)), 200, revHeader);
     default:
-      // every row is attributed, server word first: a body claiming the seal prints after its own tag
-      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${page.rows.map((r) => `- ${signed(r.by, r.sealed)}: ${r.body}`).join("\n")}\n` : page.body, revHeader);
+      // every row is attributed, server word first: a body claiming the seal prints after its own tag.
+      // The rows section is the server's, so the provenance line opens it; the body above stays byte-exact.
+      return markdown(page.rows.length ? `${page.body}\n\n## rows\n${views.PROVENANCE}\n${page.rows.map((r) => `- ${signed(r.by, r.sealed)}: ${r.body}`).join("\n")}\n` : page.body, revHeader);
   }
 }
 
@@ -732,6 +733,7 @@ function asIf(ctx: Ctx, path: string, query: URLSearchParams, opts: { html?: boo
 function pageJson(ctx: Ctx, ns: string, page: Page) {
   const url = `${ctx.base}/p/${ns}/${page.slug}`;
   return {
+    provenance: views.PROVENANCE,
     ns, slug: page.slug, rev: page.rev, by: page.by, sealed: page.sealed, note: page.note, at: iso(page.at), created: iso(page.created),
     frozen: page.frozen, hidden: page.hidden, appendOnly: page.appendOnly,
     body: page.body, meta: parseFrontMatter(page.body),
