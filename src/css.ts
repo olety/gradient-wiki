@@ -34,7 +34,7 @@ main{position:relative;margin:.75rem 0;padding:2rem 1.75rem 2.25rem}
 .head h1 .sub{font-weight:400;font-size:1.1rem;color:var(--ink-soft)}
 .under{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.25rem 1.5rem;margin-top:.4rem}
 .facts{font:13px/1.7 var(--mono);color:var(--bark);margin:0;font-variant-numeric:tabular-nums;overflow-wrap:break-word}
-.provenance{font:italic 12px/1.6 var(--mono);color:var(--bark);margin:.2rem 0 0}
+.provenance{display:block;font:12px/1.5 var(--mono);color:var(--bark);margin:0}
 .facts a{color:inherit}
 .guest{color:var(--bark);opacity:.72;letter-spacing:.02em}
 svg.seal-s{width:1.05em;height:1.05em;vertical-align:-.16em;margin-right:.32em}

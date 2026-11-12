@@ -144,8 +144,10 @@ function who(by: string, sealed: boolean, ink = false): string {
 function head(o: { ns?: string; nsHref?: string; name: string; sub?: string; facts?: string; provenance?: boolean; acts?: ([string, string] | { post: string; label: string; name: string; value: string })[] }): string {
   const ns = o.ns ? `${o.nsHref ? `<a class="nsl" href="${esc(o.nsHref)}">${esc(o.ns)}</a>` : `<span class="nsl">${esc(o.ns)}</span>`}<span class="sep">/</span>` : "";
   const acts = o.acts?.length ? `<ul class="acts">${o.acts.map((a) => Array.isArray(a) ? `<li><a href="${esc(a[1])}">${a[0]}</a></li>` : `<li><form method="post" action="${esc(a.post)}"><button class="link" name="${esc(a.name)}" value="${esc(a.value)}">${esc(a.label)}</button></form></li>`).join("")}</ul>` : "";
-  const under = o.facts || acts ? `<div class="under"><p class="facts">${o.facts ?? ""}</p>${acts}</div>` : "";
-  return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}${o.provenance ? PROVENANCE_LINE : ""}</div>`;
+  // the provenance caption sits in the facts column, directly under the date; the row keeps the facts' baseline
+  const facts = `${o.facts ?? ""}${o.provenance ? `<span class="provenance">${PROVENANCE}</span>` : ""}`;
+  const under = facts || acts ? `<div class="under"><p class="facts">${facts}</p>${acts}</div>` : "";
+  return `<div class="head"><h1>${ns}${esc(o.name)}${o.sub ? `<span class="sub"> · ${esc(o.sub)}</span>` : ""}</h1>${under}</div>`;
 }
 
 /**
